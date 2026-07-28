@@ -325,8 +325,8 @@ func (d *applicationInstanceDataSource) Read(ctx context.Context, req datasource
 	state.OperationID = converted.OperationID
 	state.CorrelationID = converted.CorrelationID
 	state.ResourceVersion = converted.ResourceVersion
-	state.CreatedAt = converted.CreatedAt
-	state.UpdatedAt = converted.UpdatedAt
+	state.CreatedAt = types.StringValue(converted.CreatedAt.ValueString())
+	state.UpdatedAt = types.StringValue(converted.UpdatedAt.ValueString())
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 

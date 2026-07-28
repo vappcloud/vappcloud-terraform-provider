@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -29,8 +30,8 @@ type computeInstanceResourceModel struct {
 	Name              types.String      `tfsdk:"name"`
 	State             types.String      `tfsdk:"state"`
 	ResourceVersion   types.Int64       `tfsdk:"resource_version"`
-	CreatedAt         types.String      `tfsdk:"created_at"`
-	UpdatedAt         types.String      `tfsdk:"updated_at"`
+	CreatedAt         timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt         timetypes.RFC3339 `tfsdk:"updated_at"`
 	Timeouts          operationTimeouts `tfsdk:"timeouts"`
 }
 
@@ -42,7 +43,7 @@ func (r *computeInstanceResource) Metadata(_ context.Context, req resource.Metad
 
 func (r *computeInstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version:             1,
+		Version:             0,
 		MarkdownDescription: "A cloud compute instance attached to a pre-created VAppCloud device. Enrollment bootstrap material is injected server-side and never returned to Terraform.",
 		Attributes: withCommon(map[string]schema.Attribute{
 			"project_id":          immutableString("Owning project ID."),
@@ -57,6 +58,10 @@ func (r *computeInstanceResource) Schema(ctx context.Context, _ resource.SchemaR
 			"timeouts":            timeoutAttributes(ctx, computeOperationTimeout),
 		}),
 	}
+}
+
+func (r *computeInstanceResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identitySchema(true)
 }
 
 func (r *computeInstanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -78,7 +83,7 @@ func (r *computeInstanceResource) Create(ctx context.Context, req resource.Creat
 		"image":               plan.Image.ValueString(),
 		"name":                plan.Name.ValueString(),
 	}
-	key := mutationKey(&resp.Diagnostics, "vappcloud_compute_instance.create", "", payload)
+	key := createMutationKey(&resp.Diagnostics, "vappcloud_compute_instance.create")
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -97,6 +102,7 @@ func (r *computeInstanceResource) Create(ctx context.Context, req resource.Creat
 	}
 	computeToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *computeInstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -105,12 +111,14 @@ func (r *computeInstanceResource) Read(ctx context.Context, req resource.ReadReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 	var compute client.ComputeInstance
 	if !readResource(ctx, r.client, "/v1/compute-instances/"+client.Escape(state.ID.ValueString()), &compute, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	computeToState(compute, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *computeInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -153,6 +161,7 @@ func (r *computeInstanceResource) Update(ctx context.Context, req resource.Updat
 	}
 	computeToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *computeInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -193,6 +202,10 @@ func (r *computeInstanceResource) Delete(ctx context.Context, req resource.Delet
 }
 
 func (r *computeInstanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if req.ID == "" {
+		importCompositeIdentity(ctx, req, resp)
+		return
+	}
 	projectID, computeID, ok := compositeImportID(req.ID, "compute instance", &resp.Diagnostics)
 	if !ok {
 		return
@@ -229,12 +242,13 @@ func computeToState(compute client.ComputeInstance, state *computeInstanceResour
 	state.Name = types.StringValue(compute.Name)
 	state.State = types.StringValue(compute.State)
 	state.ResourceVersion = types.Int64Value(compute.ResourceVersion.Int64())
-	state.CreatedAt = formatTime(compute.CreatedAt)
-	state.UpdatedAt = formatTime(compute.UpdatedAt)
+	state.CreatedAt = formatRFC3339(compute.CreatedAt)
+	state.UpdatedAt = formatRFC3339(compute.UpdatedAt)
 }
 
 var (
 	_ resource.Resource                = &computeInstanceResource{}
 	_ resource.ResourceWithConfigure   = &computeInstanceResource{}
+	_ resource.ResourceWithIdentity    = &computeInstanceResource{}
 	_ resource.ResourceWithImportState = &computeInstanceResource{}
 )

@@ -1,10 +1,13 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
 	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
@@ -30,6 +34,7 @@ type acceptanceAPI struct {
 	operations  map[string]client.Operation
 	clock       int64
 	conflictVMM bool
+	projectSeq  int64
 }
 
 func (a *acceptanceAPI) now() time.Time {
@@ -103,7 +108,12 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			var in map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			now := api.now()
-			project := client.Project{ID: "prj-test", Name: fmt.Sprint(in["name"]), Description: fmt.Sprint(in["description"]), ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+			api.projectSeq++
+			id := "prj-test"
+			if api.projectSeq > 1 {
+				id = fmt.Sprintf("prj-test-%d", api.projectSeq)
+			}
+			project := client.Project{ID: id, Name: fmt.Sprint(in["name"]), Description: fmt.Sprint(in["description"]), ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 			api.projects[project.ID] = project
 			_ = json.NewEncoder(w).Encode(client.Mutation[client.Project]{Resource: project})
 		case strings.HasPrefix(r.URL.Path, "/v1/projects/"):
@@ -435,305 +445,70 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 	return server, api
 }
 
+func checkResourceAttributesDiffer(first, second, attribute string) resource.TestCheckFunc {
+	return func(state *terraform.State) error {
+		firstResource, ok := state.RootModule().Resources[first]
+		if !ok {
+			return fmt.Errorf("resource %s not found", first)
+		}
+		secondResource, ok := state.RootModule().Resources[second]
+		if !ok {
+			return fmt.Errorf("resource %s not found", second)
+		}
+		firstValue := firstResource.Primary.Attributes[attribute]
+		secondValue := secondResource.Primary.Attributes[attribute]
+		if firstValue == "" || secondValue == "" || firstValue == secondValue {
+			return fmt.Errorf("%s.%s=%q and %s.%s=%q must be distinct non-empty values", first, attribute, firstValue, second, attribute, secondValue)
+		}
+		return nil
+	}
+}
+
+func checkAcceptanceDestroy(api *acceptanceAPI) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		api.mu.Lock()
+		defer api.mu.Unlock()
+		if len(api.projects) != 0 {
+			return fmt.Errorf("%d project resources still exist", len(api.projects))
+		}
+		if len(api.devices) != 0 {
+			return fmt.Errorf("%d device resources still exist", len(api.devices))
+		}
+		if len(api.computes) != 0 {
+			return fmt.Errorf("%d compute resources still exist", len(api.computes))
+		}
+		if api.vmm.ID != "" {
+			return fmt.Errorf("VMM resource %s still exists", api.vmm.ID)
+		}
+		if len(api.apps) != 0 {
+			return fmt.Errorf("%d application resources still exist", len(api.apps))
+		}
+		return nil
+	}
+}
+
+func identityStateChecks(checks ...statecheck.StateCheck) []statecheck.StateCheck {
+	engine := os.Getenv("TF_ACC_TERRAFORM_PATH")
+	if engine == "" {
+		engine = "terraform"
+	}
+	output, err := exec.CommandContext(context.Background(), engine, "version").Output()
+	if err != nil {
+		return nil
+	}
+	match := regexp.MustCompile(`v1\.(\d+)`).FindSubmatch(output)
+	if len(match) != 2 {
+		return nil
+	}
+	minor, err := strconv.Atoi(string(match[1]))
+	if err != nil || minor < 12 {
+		return nil
+	}
+	return checks
+}
+
 func providerFactories() map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
 		"vappcloud": providerserver.NewProtocol6WithError(New("test")()),
-	}
-}
-
-func TestAccProjectResource(t *testing.T) {
-	server, _ := newAcceptanceServer(t)
-	defer server.Close()
-	config := fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
-resource "vappcloud_project" "test" {
-  name        = "acceptance"
-  description = "created by acceptance"
-}`, server.URL)
-	resource.Test(t, resource.TestCase{
-		ProtoV6ProviderFactories: providerFactories(),
-		Steps: []resource.TestStep{
-			{
-				Config: config,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_project.test", "id", "prj-test"),
-					resource.TestCheckResourceAttr("vappcloud_project.test", "resource_version", "1"),
-				),
-			},
-			{
-				ResourceName:      "vappcloud_project.test",
-				ImportState:       true,
-				ImportStateVerify: true,
-			},
-		},
-	})
-}
-
-func TestAccVMMResourceCRUDImportAndDrift(t *testing.T) {
-	server, api := newAcceptanceServer(t)
-	defer server.Close()
-	config := func(cpu int, name string) string {
-		return fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
-resource "vappcloud_vmm" "test" {
-  project_id          = "prj-test"
-  device_id           = "dev-test"
-  name                = %q
-  cpu_cores           = %d
-  memory_mb           = 2048
-  deletion_protection = false
-  retain_disk         = false
-}`, server.URL, name, cpu)
-	}
-	resource.Test(t, resource.TestCase{
-		ProtoV6ProviderFactories: providerFactories(),
-		CheckDestroy:             func(_ *terraform.State) error { return nil },
-		Steps: []resource.TestStep{
-			{
-				Config: config(2, "secondary"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "id", "vmm-secondary"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "observed_revision", "1"),
-				),
-			},
-			{
-				PreConfig: func() {
-					api.mu.Lock()
-					api.vmm = client.VMM{}
-					api.mu.Unlock()
-				},
-				Config: config(2, "secondary"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "id", "vmm-secondary"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "management", "terraform"),
-				),
-			},
-			{
-				PreConfig: func() {
-					api.mu.Lock()
-					api.conflictVMM = true
-					api.mu.Unlock()
-				},
-				Config: config(4, "resized"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "cpu_cores", "4"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "desired_revision", "2"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "observed_revision", "2"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "resource_version", "3"),
-				),
-			},
-			{
-				ResourceName:      "vappcloud_vmm.test",
-				ImportState:       true,
-				ImportStateId:     "prj-test/vmm-secondary",
-				ImportStateVerify: true,
-			},
-			{
-				ResourceName:       "vappcloud_vmm.test",
-				ImportState:        true,
-				ImportStateId:      "prj-test/vmm-default",
-				ImportStatePersist: false,
-				ExpectError:        regexp.MustCompile("Default VMM cannot be imported"),
-			},
-		},
-	})
-}
-
-func TestAccAllResourcesAndDataSources(t *testing.T) {
-	server, _ := newAcceptanceServer(t)
-	defer server.Close()
-	config := func(suffix string, replicas int, optionals bool) string {
-		optionalProject := ""
-		optionalApplication := ""
-		if optionals {
-			optionalProject = `description = "updated project"`
-			optionalApplication = `
-  description = "updated application"
-  secret_ids  = ["secret-example"]`
-		}
-		return fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
-
-resource "vappcloud_project" "test" {
-  name = "project-%s"
-  %s
-}
-
-resource "vappcloud_device" "test" {
-  project_id = vappcloud_project.test.id
-  name       = "device-%s"
-}
-
-resource "vappcloud_compute_instance" "test" {
-  project_id          = vappcloud_project.test.id
-  device_id           = vappcloud_device.test.id
-  cloud_connection_id = "connection-test"
-  region              = "region-test"
-  size                = "size-test"
-  image               = "image-test"
-  name                = "compute-%s"
-}
-
-resource "vappcloud_vmm" "test" {
-  project_id          = vappcloud_project.test.id
-  device_id           = vappcloud_device.test.id
-  name                = "vmm-%s"
-  cpu_cores           = 2
-  memory_mb           = 2048
-  deletion_protection = false
-  retain_disk         = false
-}
-
-resource "vappcloud_application_instance" "test" {
-  project_id = vappcloud_project.test.id
-  name       = "application-%s"
-  %s
-  source = {
-    kind                       = "marketplace"
-    marketplace_application_id = "catalog-test"
-    marketplace_version_id     = "version-test"
-  }
-  placement = [{
-    vmm_id        = vappcloud_vmm.test.id
-    replica_count = %d
-  }]
-}
-
-data "vappcloud_projects" "all" {
-  depends_on = [vappcloud_project.test]
-}
-data "vappcloud_project" "selected" { id = vappcloud_project.test.id }
-data "vappcloud_devices" "all" {
-  project_id = vappcloud_project.test.id
-  depends_on = [vappcloud_device.test]
-}
-data "vappcloud_device" "selected" { id = vappcloud_device.test.id }
-data "vappcloud_compute_instances" "all" {
-  project_id = vappcloud_project.test.id
-  depends_on = [vappcloud_compute_instance.test]
-}
-data "vappcloud_compute_instance" "selected" { id = vappcloud_compute_instance.test.id }
-data "vappcloud_vmms" "all" {
-  project_id = vappcloud_project.test.id
-  depends_on = [vappcloud_vmm.test]
-}
-data "vappcloud_vmm" "selected" { id = vappcloud_vmm.test.id }
-data "vappcloud_application_instances" "all" {
-  project_id = vappcloud_project.test.id
-  depends_on = [vappcloud_application_instance.test]
-}
-data "vappcloud_application_instance" "selected" { id = vappcloud_application_instance.test.id }
-data "vappcloud_operation" "selected" {
-  id         = "op-vmm-create-vmm-secondary"
-  depends_on = [vappcloud_vmm.test]
-}
-data "vappcloud_cloud_connections" "all" { project_id = vappcloud_project.test.id }
-data "vappcloud_cloud_providers" "all" {}
-data "vappcloud_cloud_regions" "all" { cloud_connection_id = "connection-test" }
-data "vappcloud_cloud_sizes" "all" {
-  cloud_connection_id = "connection-test"
-  region              = "region-test"
-}
-data "vappcloud_cloud_images" "all" {
-  cloud_connection_id = "connection-test"
-  region              = "region-test"
-}
-data "vappcloud_marketplace_applications" "all" {}
-data "vappcloud_marketplace_versions" "all" { application_id = "catalog-test" }
-data "vappcloud_github_connections" "all" { project_id = vappcloud_project.test.id }
-data "vappcloud_github_repositories" "all" { github_connection_id = "github-test" }
-`, server.URL, suffix, optionalProject, suffix, suffix, suffix, suffix, optionalApplication, replicas)
-	}
-
-	resource.Test(t, resource.TestCase{
-		ProtoV6ProviderFactories: providerFactories(),
-		Steps: []resource.TestStep{
-			{
-				Config: config("initial", 1, false),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_project.test", "resource_version", "1"),
-					resource.TestCheckResourceAttr("vappcloud_device.test", "state", "pending"),
-					resource.TestCheckResourceAttr("vappcloud_compute_instance.test", "state", "running"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "management", "terraform"),
-					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "desired_replicas", "1"),
-					resource.TestCheckResourceAttr("data.vappcloud_projects.all", "projects.#", "1"),
-					resource.TestCheckResourceAttr("data.vappcloud_devices.all", "items.#", "1"),
-					resource.TestCheckResourceAttr("data.vappcloud_compute_instances.all", "items.#", "1"),
-					resource.TestCheckResourceAttr("data.vappcloud_vmms.all", "items.#", "2"),
-					resource.TestCheckResourceAttr("data.vappcloud_application_instances.all", "items.#", "1"),
-					resource.TestCheckResourceAttr("data.vappcloud_cloud_connections.all", "items.#", "1"),
-					resource.TestCheckResourceAttr("data.vappcloud_operation.selected", "state", "succeeded"),
-				),
-			},
-			{
-				Config: config("updated", 2, true),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_project.test", "resource_version", "2"),
-					resource.TestCheckResourceAttr("vappcloud_device.test", "resource_version", "2"),
-					resource.TestCheckResourceAttr("vappcloud_compute_instance.test", "resource_version", "2"),
-					resource.TestCheckResourceAttr("vappcloud_vmm.test", "resource_version", "2"),
-					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "resource_version", "2"),
-					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "desired_replicas", "2"),
-					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "secret_ids.#", "1"),
-				),
-			},
-			{
-				ResourceName:      "vappcloud_device.test",
-				ImportState:       true,
-				ImportStateId:     "prj-test/dev-test",
-				ImportStateVerify: true,
-			},
-			{
-				ResourceName:      "vappcloud_compute_instance.test",
-				ImportState:       true,
-				ImportStateId:     "prj-test/compute-test",
-				ImportStateVerify: true,
-			},
-			{
-				ResourceName:      "vappcloud_application_instance.test",
-				ImportState:       true,
-				ImportStateId:     "prj-test/app-test",
-				ImportStateVerify: true,
-			},
-		},
-	})
-}
-
-func TestAccVMMStressTwentyLifecycles(t *testing.T) {
-	for iteration := 0; iteration < 20; iteration++ {
-		t.Run(fmt.Sprintf("iteration-%02d", iteration+1), func(t *testing.T) {
-			server, _ := newAcceptanceServer(t)
-			defer server.Close()
-			config := fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
-resource "vappcloud_vmm" "stress" {
-  project_id          = "prj-test"
-  device_id           = "dev-test"
-  name                = "stress-%02d"
-  cpu_cores           = 2
-  memory_mb           = 2048
-  deletion_protection = false
-  retain_disk         = false
-}`, server.URL, iteration+1)
-			resource.Test(t, resource.TestCase{
-				ProtoV6ProviderFactories: providerFactories(),
-				Steps: []resource.TestStep{{
-					Config: config,
-					Check:  resource.TestCheckResourceAttr("vappcloud_vmm.stress", "state", "running"),
-				}},
-			})
-		})
 	}
 }

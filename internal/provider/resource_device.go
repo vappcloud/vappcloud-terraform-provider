@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -24,8 +25,8 @@ type deviceResourceModel struct {
 	State           types.String      `tfsdk:"state"`
 	DefaultVMMID    types.String      `tfsdk:"default_vmm_id"`
 	ResourceVersion types.Int64       `tfsdk:"resource_version"`
-	CreatedAt       types.String      `tfsdk:"created_at"`
-	UpdatedAt       types.String      `tfsdk:"updated_at"`
+	CreatedAt       timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt       timetypes.RFC3339 `tfsdk:"updated_at"`
 	Timeouts        operationTimeouts `tfsdk:"timeouts"`
 }
 
@@ -37,7 +38,7 @@ func (r *deviceResource) Metadata(_ context.Context, req resource.MetadataReques
 
 func (r *deviceResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version:             1,
+		Version:             0,
 		MarkdownDescription: "A logical VAppCloud device created in pending enrollment state. Compute may later attach to it.",
 		Attributes: withCommon(map[string]schema.Attribute{
 			"project_id":     immutableString("Owning project ID."),
@@ -47,6 +48,10 @@ func (r *deviceResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			"timeouts":       timeoutAttributes(ctx, deviceOperationTimeout),
 		}),
 	}
+}
+
+func (r *deviceResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identitySchema(true)
 }
 
 func (r *deviceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -63,7 +68,7 @@ func (r *deviceResource) Create(ctx context.Context, req resource.CreateRequest,
 		"project_id": plan.ProjectID.ValueString(),
 		"name":       plan.Name.ValueString(),
 	}
-	key := mutationKey(&resp.Diagnostics, "vappcloud_device.create", "", payload)
+	key := createMutationKey(&resp.Diagnostics, "vappcloud_device.create")
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -82,6 +87,7 @@ func (r *deviceResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	deviceToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *deviceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -90,12 +96,14 @@ func (r *deviceResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 	var device client.Device
 	if !readResource(ctx, r.client, "/v1/devices/"+client.Escape(state.ID.ValueString()), &device, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	deviceToState(device, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *deviceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -138,6 +146,7 @@ func (r *deviceResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 	deviceToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *deviceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -178,6 +187,10 @@ func (r *deviceResource) Delete(ctx context.Context, req resource.DeleteRequest,
 }
 
 func (r *deviceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if req.ID == "" {
+		importCompositeIdentity(ctx, req, resp)
+		return
+	}
 	projectID, deviceID, ok := compositeImportID(req.ID, "device", &resp.Diagnostics)
 	if !ok {
 		return
@@ -209,12 +222,13 @@ func deviceToState(device client.Device, state *deviceResourceModel) {
 		state.DefaultVMMID = types.StringValue(device.DefaultVMMID)
 	}
 	state.ResourceVersion = types.Int64Value(device.ResourceVersion.Int64())
-	state.CreatedAt = formatTime(device.CreatedAt)
-	state.UpdatedAt = formatTime(device.UpdatedAt)
+	state.CreatedAt = formatRFC3339(device.CreatedAt)
+	state.UpdatedAt = formatRFC3339(device.UpdatedAt)
 }
 
 var (
 	_ resource.Resource                = &deviceResource{}
 	_ resource.ResourceWithConfigure   = &deviceResource{}
+	_ resource.ResourceWithIdentity    = &deviceResource{}
 	_ resource.ResourceWithImportState = &deviceResource{}
 )

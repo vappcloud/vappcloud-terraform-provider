@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -17,6 +18,7 @@ import (
 var (
 	_ resource.Resource                = &projectResource{}
 	_ resource.ResourceWithConfigure   = &projectResource{}
+	_ resource.ResourceWithIdentity    = &projectResource{}
 	_ resource.ResourceWithImportState = &projectResource{}
 )
 
@@ -29,8 +31,8 @@ type projectResourceModel struct {
 	Name            types.String      `tfsdk:"name"`
 	Description     types.String      `tfsdk:"description"`
 	ResourceVersion types.Int64       `tfsdk:"resource_version"`
-	CreatedAt       types.String      `tfsdk:"created_at"`
-	UpdatedAt       types.String      `tfsdk:"updated_at"`
+	CreatedAt       timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt       timetypes.RFC3339 `tfsdk:"updated_at"`
 	Timeouts        operationTimeouts `tfsdk:"timeouts"`
 }
 
@@ -44,7 +46,7 @@ func (r *projectResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *projectResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version:             1,
+		Version:             0,
 		MarkdownDescription: "A VAppCloud project. Projects are the tenant boundary for devices, VMMs, compute, and applications.",
 		Attributes: withCommon(map[string]schema.Attribute{
 			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "Project name."},
@@ -52,6 +54,10 @@ func (r *projectResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 			"timeouts":    timeoutAttributes(ctx, projectOperationTimeout),
 		}),
 	}
+}
+
+func (r *projectResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identitySchema(false)
 }
 
 func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -65,7 +71,7 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 	payload := map[string]any{"name": plan.Name.ValueString(), "description": plan.Description.ValueString()}
-	key := mutationKey(&resp.Diagnostics, "vappcloud_project.create", "", payload)
+	key := createMutationKey(&resp.Diagnostics, "vappcloud_project.create")
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -84,6 +90,7 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 	projectToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), "", &resp.Diagnostics)
 }
 
 func (r *projectResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -92,12 +99,14 @@ func (r *projectResource) Read(ctx context.Context, req resource.ReadRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), "", &resp.Diagnostics)
 	var project client.Project
 	if !readResource(ctx, r.client, "/v1/projects/"+client.Escape(state.ID.ValueString()), &project, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	projectToState(project, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), "", &resp.Diagnostics)
 }
 
 func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -144,6 +153,7 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 	}
 	projectToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), "", &resp.Diagnostics)
 }
 
 func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -184,7 +194,7 @@ func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest
 }
 
 func (r *projectResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), req, resp)
 }
 
 func projectToState(project client.Project, state *projectResourceModel) {
@@ -196,6 +206,6 @@ func projectToState(project client.Project, state *projectResourceModel) {
 		state.Description = types.StringValue(project.Description)
 	}
 	state.ResourceVersion = types.Int64Value(project.ResourceVersion.Int64())
-	state.CreatedAt = formatTime(project.CreatedAt)
-	state.UpdatedAt = formatTime(project.UpdatedAt)
+	state.CreatedAt = formatRFC3339(project.CreatedAt)
+	state.UpdatedAt = formatRFC3339(project.UpdatedAt)
 }

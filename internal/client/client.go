@@ -3,7 +3,10 @@ package client
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,26 +17,48 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"golang.org/x/time/rate"
 )
 
 const (
 	defaultTimeout = 30 * time.Second
-	maxAttempts    = 6
+	defaultRetries = 5
 )
+
+type Config struct {
+	BaseURL            string
+	Token              string
+	ProviderVersion    string
+	TerraformVersion   string
+	AppendUserAgent    string
+	EndpointOverrides  map[string]string
+	RequestTimeout     time.Duration
+	MaxRetries         int
+	RetryMaxWait       time.Duration
+	RateLimitPerSecond float64
+	ProxyURL           string
+	CACertificatePEM   string
+	InsecureSkipVerify bool
+}
 
 type Client struct {
 	baseURL      *url.URL
+	endpoints    map[string]*url.URL
 	token        string
 	jwt          string
 	jwtExpiresAt time.Time
 	userAgent    string
 	http         *http.Client
+	maxAttempts  int
+	retryMaxWait time.Duration
+	limiter      *rate.Limiter
 	mu           sync.Mutex
 	sleep        func(context.Context, time.Duration) error
 }
@@ -44,18 +69,98 @@ type tokenResponse struct {
 }
 
 func New(baseURL, token, version string) (*Client, error) {
-	if strings.TrimSpace(token) == "" {
+	return NewWithConfig(Config{
+		BaseURL: baseURL, Token: token, ProviderVersion: version, MaxRetries: defaultRetries,
+	})
+}
+
+func NewWithConfig(config Config) (*Client, error) {
+	if strings.TrimSpace(config.Token) == "" {
 		return nil, errors.New("VAppCloud token is required")
 	}
-	u, err := ValidateBaseURL(baseURL)
+	u, err := ValidateBaseURL(config.BaseURL)
 	if err != nil {
 		return nil, err
 	}
+	timeout := config.RequestTimeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	maxRetries := config.MaxRetries
+	if maxRetries < 0 {
+		return nil, errors.New("max retries cannot be negative")
+	}
+	retryMaxWait := config.RetryMaxWait
+	if retryMaxWait <= 0 {
+		retryMaxWait = 30 * time.Second
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 20
+	transport.IdleConnTimeout = 90 * time.Second
+	if config.ProxyURL != "" {
+		proxy, proxyErr := url.Parse(config.ProxyURL)
+		if proxyErr != nil || proxy.Scheme == "" || proxy.Host == "" {
+			return nil, fmt.Errorf("invalid proxy URL %q", config.ProxyURL)
+		}
+		transport.Proxy = http.ProxyURL(proxy)
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: config.InsecureSkipVerify} // #nosec G402 -- explicit opt-in for development endpoints.
+	if config.CACertificatePEM != "" {
+		pem := config.CACertificatePEM
+		if !strings.Contains(pem, "BEGIN CERTIFICATE") {
+			contents, readErr := os.ReadFile(pem)
+			if readErr != nil {
+				return nil, fmt.Errorf("read custom CA certificate: %w", readErr)
+			}
+			pem = string(contents)
+		}
+		roots, rootsErr := x509.SystemCertPool()
+		if rootsErr != nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM([]byte(pem)) {
+			return nil, errors.New("custom CA certificate contains no valid PEM certificates")
+		}
+		tlsConfig.RootCAs = roots
+	}
+	transport.TLSClientConfig = tlsConfig
+	userAgent := "terraform-provider-vappcloud/" + config.ProviderVersion
+	if config.TerraformVersion != "" {
+		userAgent += " terraform/" + config.TerraformVersion
+	}
+	appendUA := strings.TrimSpace(config.AppendUserAgent)
+	if appendUA == "" {
+		appendUA = strings.TrimSpace(os.Getenv("TF_APPEND_USER_AGENT"))
+	}
+	if appendUA != "" {
+		userAgent += " " + appendUA
+	}
+	var limiter *rate.Limiter
+	if config.RateLimitPerSecond > 0 {
+		limiter = rate.NewLimiter(rate.Limit(config.RateLimitPerSecond), 1)
+	}
+	endpoints := make(map[string]*url.URL, len(config.EndpointOverrides))
+	for service, endpoint := range config.EndpointOverrides {
+		service = strings.Trim(strings.TrimSpace(service), "/")
+		if service == "" || strings.Contains(service, "/") {
+			return nil, fmt.Errorf("endpoint override key %q must be one API path segment", service)
+		}
+		override, overrideErr := ValidateBaseURL(endpoint)
+		if overrideErr != nil {
+			return nil, fmt.Errorf("invalid %s endpoint override: %w", service, overrideErr)
+		}
+		endpoints[service] = override
+	}
 	return &Client{
-		baseURL:   u,
-		token:     token,
-		userAgent: "terraform-provider-vappcloud/" + version,
-		http:      &http.Client{Timeout: defaultTimeout},
+		baseURL:      u,
+		endpoints:    endpoints,
+		token:        config.Token,
+		userAgent:    userAgent,
+		http:         &http.Client{Timeout: timeout, Transport: transport},
+		maxAttempts:  maxRetries + 1,
+		retryMaxWait: retryMaxWait,
+		limiter:      limiter,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			t := time.NewTimer(d)
 			defer t.Stop()
@@ -152,10 +257,15 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 	}
 
 	reauthenticated := false
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; attempt < c.maxAttempts; attempt++ {
+		if c.limiter != nil {
+			if err := c.limiter.Wait(ctx); err != nil {
+				return fmt.Errorf("wait for VAppCloud API rate limit: %w", err)
+			}
+		}
 		logFields := map[string]any{"method": method, "path": path, "attempt": attempt + 1}
 		tflog.Trace(ctx, "VAppCloud API request", logFields)
-		req, reqErr := http.NewRequestWithContext(ctx, method, c.baseURL.String()+path, bytes.NewReader(encoded))
+		req, reqErr := http.NewRequestWithContext(ctx, method, c.requestURL(path), bytes.NewReader(encoded))
 		if reqErr != nil {
 			return reqErr
 		}
@@ -173,7 +283,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 			tflog.Trace(ctx, "VAppCloud API transport error", map[string]any{
 				"method": method, "path": path, "attempt": attempt + 1,
 			})
-			if attempt == maxAttempts-1 {
+			if attempt == c.maxAttempts-1 {
 				return fmt.Errorf("VAppCloud API request failed: %w", doErr)
 			}
 			if err := c.sleep(ctx, c.backoff(attempt, 0)); err != nil {
@@ -217,7 +327,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 			}
 			continue
 		}
-		if !apiErr.Retryable || attempt == maxAttempts-1 {
+		if !apiErr.Retryable || attempt == c.maxAttempts-1 {
 			apiErr.Message = redact(apiErr.Message, c.token, token)
 			for key, value := range apiErr.Details {
 				apiErr.Details[key] = redact(value, c.token, token)
@@ -229,6 +339,18 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 		}
 	}
 	return errors.New("VAppCloud API retry budget exhausted")
+}
+
+func (c *Client) requestURL(path string) string {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	service := parts[0]
+	if service == "v1" && len(parts) > 1 {
+		service = parts[1]
+	}
+	if endpoint, ok := c.endpoints[service]; ok {
+		return endpoint.String() + path
+	}
+	return c.baseURL.String() + path
 }
 
 func redact(value string, secrets ...string) string {
@@ -275,14 +397,25 @@ func decodeAPIError(res *http.Response) *APIError {
 
 func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
-		if retryAfter > 30*time.Second {
-			return 30 * time.Second
+		if retryAfter > c.retryMaxWait {
+			return c.retryMaxWait
 		}
 		return retryAfter
 	}
-	base := math.Min(30, math.Pow(2, float64(attempt)))
+	base := math.Min(c.retryMaxWait.Seconds(), math.Pow(2, float64(attempt)))
 	jitter := 0.75 + rand.Float64()*0.5
 	return time.Duration(base * jitter * float64(time.Second))
+}
+
+// NewIdempotencyKey returns an invocation-scoped replay key. Create calls use
+// one key for the entire HTTP retry loop, while distinct Terraform resource
+// instances always receive distinct keys even when their payloads are equal.
+func NewIdempotencyKey(resourceType string) (string, error) {
+	var entropy [24]byte
+	if _, err := cryptorand.Read(entropy[:]); err != nil {
+		return "", fmt.Errorf("generate idempotency key: %w", err)
+	}
+	return "tf-" + strings.ReplaceAll(resourceType, ".", "-") + "-" + hex.EncodeToString(entropy[:]), nil
 }
 
 // StableIdempotencyKey derives a replay key from the Terraform operation and

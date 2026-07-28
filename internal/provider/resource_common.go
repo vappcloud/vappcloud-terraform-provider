@@ -9,11 +9,15 @@ import (
 	"time"
 
 	resourceTimeouts "github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
 	resourceschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
@@ -32,6 +36,44 @@ type resourceBase struct {
 	client *client.Client
 }
 
+func identitySchema(includeProject bool) identityschema.Schema {
+	attributes := map[string]identityschema.Attribute{
+		"id": identityschema.StringAttribute{
+			RequiredForImport: true,
+			Description:       "Opaque VAppCloud resource identifier.",
+		},
+	}
+	if includeProject {
+		attributes["project_id"] = identityschema.StringAttribute{
+			RequiredForImport: true,
+			Description:       "Owning VAppCloud project identifier.",
+		}
+	}
+	return identityschema.Schema{Version: 0, Attributes: attributes}
+}
+
+func setResourceIdentity(
+	ctx context.Context,
+	identity *tfsdk.ResourceIdentity,
+	id string,
+	projectID string,
+	diagnostics *diag.Diagnostics,
+) {
+	diagnostics.Append(identity.SetAttribute(ctx, path.Root("id"), types.StringValue(id))...)
+	if projectID != "" {
+		diagnostics.Append(identity.SetAttribute(ctx, path.Root("project_id"), types.StringValue(projectID))...)
+	}
+}
+
+func importCompositeIdentity(
+	ctx context.Context,
+	req resource.ImportStateRequest,
+	resp *resource.ImportStateResponse,
+) {
+	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), req, resp)
+	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("project_id"), path.Root("project_id"), req, resp)
+}
+
 func compositeImportID(id, resourceName string, diagnostics *diag.Diagnostics) (string, string, bool) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -46,6 +88,13 @@ func compositeImportID(id, resourceName string, diagnostics *diag.Diagnostics) (
 
 func (r *resourceBase) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client = providerClient(req.ProviderData, &resp.Diagnostics)
+}
+
+// ModifyPlan marks every managed resource as supporting resource-level plan
+// refinement. Attribute plan modifiers perform the actual refinement; this
+// hook intentionally preserves configuration values and enables consistent
+// plan-only acceptance checks across all resources.
+func (r *resourceBase) ModifyPlan(_ context.Context, _ resource.ModifyPlanRequest, _ *resource.ModifyPlanResponse) {
 }
 
 func computedID() resourceschema.StringAttribute {
@@ -79,6 +128,18 @@ func computedString(description string) resourceschema.StringAttribute {
 	}
 }
 
+func computedRFC3339(description string, immutable bool) resourceschema.StringAttribute {
+	attribute := resourceschema.StringAttribute{
+		Computed:            true,
+		CustomType:          timetypes.RFC3339Type{},
+		MarkdownDescription: description,
+	}
+	if immutable {
+		attribute.PlanModifiers = []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
+	}
+	return attribute
+}
+
 func commonComputedAttributes() map[string]resourceschema.Attribute {
 	return map[string]resourceschema.Attribute{
 		"id": computedID(),
@@ -86,8 +147,8 @@ func commonComputedAttributes() map[string]resourceschema.Attribute {
 			Computed:            true,
 			MarkdownDescription: "Optimistic concurrency version.",
 		},
-		"created_at": immutableComputedString("Creation timestamp in RFC3339 format."),
-		"updated_at": computedString("Last update timestamp in RFC3339 format."),
+		"created_at": computedRFC3339("Creation timestamp in RFC3339 format.", true),
+		"updated_at": computedRFC3339("Last update timestamp in RFC3339 format.", false),
 	}
 }
 
@@ -132,6 +193,13 @@ func deleteTimeout(ctx context.Context, value operationTimeouts, fallback time.D
 	timeout, diags := value.Delete(ctx, fallback)
 	diagnostics.Append(diags...)
 	return timeout
+}
+
+func formatRFC3339(t time.Time) timetypes.RFC3339 {
+	if t.IsZero() {
+		return timetypes.NewRFC3339Null()
+	}
+	return timetypes.NewRFC3339TimeValue(t.UTC())
 }
 
 func formatTime(t time.Time) types.String {
@@ -199,6 +267,15 @@ func mutationKey(diagnostics *diag.Diagnostics, operation, resourceID string, pa
 	key, err := client.StableIdempotencyKey(operation, resourceID, payload)
 	if err != nil {
 		diagnostics.AddError("Unable to derive stable idempotency key", err.Error())
+		return ""
+	}
+	return key
+}
+
+func createMutationKey(diagnostics *diag.Diagnostics, resourceType string) string {
+	key, err := client.NewIdempotencyKey(resourceType)
+	if err != nil {
+		diagnostics.AddError("Unable to generate create idempotency key", err.Error())
 		return ""
 	}
 	return key

@@ -18,6 +18,9 @@ import (
 func TestProviderContract(t *testing.T) {
 	t.Parallel()
 	p := New("test")()
+	if _, ok := p.(provider.ProviderWithConfigValidators); !ok {
+		t.Fatal("provider must implement ProviderWithConfigValidators")
+	}
 	var schemaResponse provider.SchemaResponse
 	p.Schema(context.Background(), provider.SchemaRequest{}, &schemaResponse)
 	if schemaResponse.Diagnostics.HasError() {
@@ -30,9 +33,28 @@ func TestProviderContract(t *testing.T) {
 	resources := p.Resources(context.Background())
 	got := map[string]bool{}
 	for _, constructor := range resources {
+		managed := constructor()
 		var response resource.MetadataResponse
-		constructor().Metadata(context.Background(), resource.MetadataRequest{ProviderTypeName: "vappcloud"}, &response)
+		managed.Metadata(context.Background(), resource.MetadataRequest{ProviderTypeName: "vappcloud"}, &response)
 		got[response.TypeName] = true
+		var schemaResponse resource.SchemaResponse
+		managed.Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+		if schemaResponse.Schema.Version != 0 {
+			t.Errorf("%s schema version = %d, want 0", response.TypeName, schemaResponse.Schema.Version)
+		}
+		identityResource, ok := managed.(resource.ResourceWithIdentity)
+		if !ok {
+			t.Errorf("%s does not implement ResourceWithIdentity", response.TypeName)
+		} else {
+			var identityResponse resource.IdentitySchemaResponse
+			identityResource.IdentitySchema(context.Background(), resource.IdentitySchemaRequest{}, &identityResponse)
+			if identityResponse.IdentitySchema.Version != 0 || identityResponse.IdentitySchema.Attributes["id"] == nil {
+				t.Errorf("%s has an invalid identity schema", response.TypeName)
+			}
+		}
+		if _, ok := managed.(resource.ResourceWithModifyPlan); !ok {
+			t.Errorf("%s does not implement ResourceWithModifyPlan", response.TypeName)
+		}
 	}
 	for _, name := range []string{
 		"vappcloud_project", "vappcloud_device", "vappcloud_compute_instance",

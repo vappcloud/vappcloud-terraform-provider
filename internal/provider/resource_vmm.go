@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -41,8 +42,8 @@ type vmmResourceModel struct {
 	OperationID        types.String      `tfsdk:"operation_id"`
 	CorrelationID      types.String      `tfsdk:"correlation_id"`
 	ResourceVersion    types.Int64       `tfsdk:"resource_version"`
-	CreatedAt          types.String      `tfsdk:"created_at"`
-	UpdatedAt          types.String      `tfsdk:"updated_at"`
+	CreatedAt          timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt          timetypes.RFC3339 `tfsdk:"updated_at"`
 	Timeouts           operationTimeouts `tfsdk:"timeouts"`
 }
 
@@ -55,7 +56,7 @@ func (r *vmmResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 func (r *vmmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	positive := []validator.Int64{int64validator.AtLeast(1)}
 	resp.Schema = schema.Schema{
-		Version: 1,
+		Version: 0,
 		MarkdownDescription: "A Terraform-managed secondary VMM. The system-managed default VMM is read-only and " +
 			"is available through VMM data sources; it cannot be created, adopted, imported, or destroyed by this resource.",
 		Attributes: withCommon(map[string]schema.Attribute{
@@ -91,6 +92,10 @@ func (r *vmmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 	}
 }
 
+func (r *vmmResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identitySchema(true)
+}
+
 func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan vmmResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -111,7 +116,7 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 		"retain_disk":         plan.RetainDisk.ValueBool(),
 		"terraform_owned":     true,
 	}
-	key := mutationKey(&resp.Diagnostics, "vappcloud_vmm.create", "", payload)
+	key := createMutationKey(&resp.Diagnostics, "vappcloud_vmm.create")
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -134,6 +139,7 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -142,6 +148,7 @@ func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 	var vmm client.VMM
 	if !readResource(ctx, r.client, "/v1/vmms/"+client.Escape(state.ID.ValueString()), &vmm, &resp.State, &resp.Diagnostics) {
 		return
@@ -152,6 +159,7 @@ func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	}
 	vmmToState(vmm, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -201,6 +209,7 @@ func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *vmmResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -246,6 +255,10 @@ func (r *vmmResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 }
 
 func (r *vmmResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if req.ID == "" {
+		importCompositeIdentity(ctx, req, resp)
+		return
+	}
 	parts := strings.Split(req.ID, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		resp.Diagnostics.AddError("Invalid VMM import identifier", "Expected <project_id>/<vmm_id>.")
@@ -288,12 +301,13 @@ func vmmToState(vmm client.VMM, state *vmmResourceModel) {
 	state.OperationStatus = types.StringValue(vmm.Operation.State)
 	state.OperationID = types.StringValue(vmm.Operation.ID)
 	state.CorrelationID = types.StringValue(vmm.Operation.CorrelationID)
-	state.CreatedAt = formatTime(vmm.CreatedAt)
-	state.UpdatedAt = formatTime(vmm.UpdatedAt)
+	state.CreatedAt = formatRFC3339(vmm.CreatedAt)
+	state.UpdatedAt = formatRFC3339(vmm.UpdatedAt)
 }
 
 var (
 	_ resource.Resource                = &vmmResource{}
 	_ resource.ResourceWithConfigure   = &vmmResource{}
+	_ resource.ResourceWithIdentity    = &vmmResource{}
 	_ resource.ResourceWithImportState = &vmmResource{}
 )

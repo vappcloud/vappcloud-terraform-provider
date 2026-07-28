@@ -304,7 +304,7 @@ func TestBoundedRetryUsesIdempotencyKey(t *testing.T) {
 func TestResponseLossReplaysSameMutation(t *testing.T) {
 	t.Parallel()
 	payload := map[string]string{"name": "worker"}
-	key, err := StableIdempotencyKey("vappcloud_vmm.create", "", payload)
+	key, err := NewIdempotencyKey("vappcloud_vmm.create")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,6 +333,75 @@ func TestResponseLossReplaysSameMutation(t *testing.T) {
 	}
 	if attempts.Load() != 2 || commits.Load() != 1 || out.ID != "vmm-replayed" {
 		t.Fatalf("unexpected replay result: attempts=%d commits=%d resource=%+v", attempts.Load(), commits.Load(), out)
+	}
+}
+
+func TestCreateIdempotencyKeysAreUniqueForIdenticalPayloads(t *testing.T) {
+	t.Parallel()
+	first, err := NewIdempotencyKey("vappcloud_vmm.create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewIdempotencyKey("vappcloud_vmm.create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("distinct create invocations generated the same key: %s", first)
+	}
+}
+
+func TestConfiguredUserAgentAndEndpointOverride(t *testing.T) {
+	t.Parallel()
+	var gotUserAgent string
+	override := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.Header.Get("User-Agent")
+		_ = json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
+	}))
+	defer override.Close()
+	c, err := NewWithConfig(Config{
+		BaseURL:          "http://127.0.0.1",
+		Token:            "opaque-token",
+		ProviderVersion:  "1.2.3",
+		TerraformVersion: "1.15.8",
+		AppendUserAgent:  "company-module/4.0",
+		EndpointOverrides: map[string]string{
+			"vmms": override.URL,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]string
+	if err := c.Do(context.Background(), http.MethodGet, "/v1/vmms", nil, &out, ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotUserAgent != "terraform-provider-vappcloud/1.2.3 terraform/1.15.8 company-module/4.0" {
+		t.Fatalf("unexpected user agent %q", gotUserAgent)
+	}
+}
+
+func TestConfiguredZeroRetriesMakesOneAttempt(t *testing.T) {
+	t.Parallel()
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(APIError{Code: "UNAVAILABLE", Message: "retry"})
+	}))
+	defer server.Close()
+	c, err := NewWithConfig(Config{
+		BaseURL: server.URL, Token: "opaque-token", ProviderVersion: "test", MaxRetries: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Do(context.Background(), http.MethodPost, "/v1/projects", map[string]string{"name": "one"}, nil, "key")
+	if err == nil {
+		t.Fatal("expected service unavailable error")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("expected one attempt with max_retries=0, got %d", attempts.Load())
 	}
 }
 

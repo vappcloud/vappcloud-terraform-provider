@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -43,8 +44,8 @@ type applicationInstanceResourceModel struct {
 	OperationID     types.String      `tfsdk:"operation_id"`
 	CorrelationID   types.String      `tfsdk:"correlation_id"`
 	ResourceVersion types.Int64       `tfsdk:"resource_version"`
-	CreatedAt       types.String      `tfsdk:"created_at"`
-	UpdatedAt       types.String      `tfsdk:"updated_at"`
+	CreatedAt       timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt       timetypes.RFC3339 `tfsdk:"updated_at"`
 	Timeouts        operationTimeouts `tfsdk:"timeouts"`
 }
 
@@ -84,7 +85,7 @@ func (r *applicationInstanceResource) Metadata(_ context.Context, req resource.M
 
 func (r *applicationInstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version:             1,
+		Version:             0,
 		MarkdownDescription: "A marketplace or GitHub application deployed explicitly to one or more VMMs.",
 		Attributes: withCommon(map[string]schema.Attribute{
 			"project_id":  immutableString("Owning project ID."),
@@ -140,6 +141,10 @@ func (r *applicationInstanceResource) Schema(ctx context.Context, _ resource.Sch
 			"timeouts":         timeoutAttributes(ctx, operationTimeout),
 		}),
 	}
+}
+
+func (r *applicationInstanceResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identitySchema(true)
 }
 
 func (r *applicationInstanceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
@@ -198,7 +203,7 @@ func (r *applicationInstanceResource) Create(ctx context.Context, req resource.C
 		"placements":  placements,
 		"secret_ids":  secretIDs,
 	}
-	key := mutationKey(&resp.Diagnostics, "vappcloud_application_instance.create", "", payload)
+	key := createMutationKey(&resp.Diagnostics, "vappcloud_application_instance.create")
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -217,6 +222,7 @@ func (r *applicationInstanceResource) Create(ctx context.Context, req resource.C
 	}
 	applicationToState(result.Resource, &plan, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *applicationInstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -225,12 +231,14 @@ func (r *applicationInstanceResource) Read(ctx context.Context, req resource.Rea
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 	var instance client.ApplicationInstance
 	if !readResource(ctx, r.client, "/v1/application-instances/"+client.Escape(state.ID.ValueString()), &instance, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	applicationToState(instance, &state, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *applicationInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -283,6 +291,7 @@ func (r *applicationInstanceResource) Update(ctx context.Context, req resource.U
 	}
 	applicationToState(result.Resource, &plan, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *applicationInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -323,6 +332,10 @@ func (r *applicationInstanceResource) Delete(ctx context.Context, req resource.D
 }
 
 func (r *applicationInstanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if req.ID == "" {
+		importCompositeIdentity(ctx, req, resp)
+		return
+	}
 	parts := strings.Split(req.ID, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		resp.Diagnostics.AddError("Invalid application import identifier", "Expected <project_id>/<application_instance_id>.")
@@ -423,8 +436,8 @@ func applicationToState(instance client.ApplicationInstance, state *applicationI
 	state.OperationStatus = types.StringValue(instance.Operation.State)
 	state.OperationID = types.StringValue(instance.Operation.ID)
 	state.CorrelationID = types.StringValue(instance.Operation.CorrelationID)
-	state.CreatedAt = formatTime(instance.CreatedAt)
-	state.UpdatedAt = formatTime(instance.UpdatedAt)
+	state.CreatedAt = formatRFC3339(instance.CreatedAt)
+	state.UpdatedAt = formatRFC3339(instance.UpdatedAt)
 }
 
 func stringOrNull(value string) types.String {
@@ -437,6 +450,7 @@ func stringOrNull(value string) types.String {
 var (
 	_ resource.Resource                   = &applicationInstanceResource{}
 	_ resource.ResourceWithConfigure      = &applicationInstanceResource{}
+	_ resource.ResourceWithIdentity       = &applicationInstanceResource{}
 	_ resource.ResourceWithImportState    = &applicationInstanceResource{}
 	_ resource.ResourceWithValidateConfig = &applicationInstanceResource{}
 )

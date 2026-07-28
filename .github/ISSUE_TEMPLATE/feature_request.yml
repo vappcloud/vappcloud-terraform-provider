@@ -1,0 +1,18 @@
+name: Feature request
+description: Propose provider behavior or a new managed surface.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Proposed configuration
+    validations:
+      required: true
+

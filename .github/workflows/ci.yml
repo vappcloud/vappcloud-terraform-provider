@@ -17,6 +17,7 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: true
+      - uses: arduino/setup-task@v2
       - name: Formatting
         shell: bash
         run: test -z "$(gofmt -l .)"
@@ -25,9 +26,11 @@ jobs:
           version: v2.12.2
       - name: Generated documentation is current
         run: |
-          go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 generate \
-            --provider-name vappcloud --rendered-provider-name VAppCloud
+          task docs
           git diff --exit-code -- docs
+          task docs:check
+      - name: Changelog and license
+        run: task changelog:check
 
   verify:
     strategy:
@@ -47,8 +50,24 @@ jobs:
   acceptance:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        engine: [terraform, tofu]
+        include:
+          - engine: terraform
+            version: 1.15.8
+            host: registry.terraform.io
+          - engine: terraform
+            version: 1.12.2
+            host: registry.terraform.io
+          - engine: terraform
+            version: 1.11.4
+            host: registry.terraform.io
+          - engine: tofu
+            version: 1.12.5
+            host: registry.opentofu.org
+          - engine: tofu
+            version: 1.11.13
+            host: registry.opentofu.org
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,18 +77,18 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         if: matrix.engine == 'terraform'
         with:
-          terraform_version: '1.5.7'
+          terraform_version: ${{ matrix.version }}
           terraform_wrapper: false
       - uses: opentofu/setup-opentofu@v1
         if: matrix.engine == 'tofu'
         with:
-          tofu_version: '1.6.3'
+          tofu_version: ${{ matrix.version }}
           tofu_wrapper: false
       - name: Run acceptance suite
         shell: bash
         env:
           TF_ACC: '1'
-          TF_ACC_PROVIDER_HOST: ${{ matrix.engine == 'tofu' && 'registry.opentofu.org' || 'registry.terraform.io' }}
+          TF_ACC_PROVIDER_HOST: ${{ matrix.host }}
           TF_ACC_PROVIDER_NAMESPACE: vappcloud
         run: |
           TF_ACC_TERRAFORM_PATH="$(command -v '${{ matrix.engine }}')" \
