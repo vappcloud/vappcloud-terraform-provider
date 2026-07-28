@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -51,9 +50,7 @@ func (p *vappcloudProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 				Optional:            true,
 				MarkdownDescription: "VAppCloud API base URL. Defaults to `VAPPCLOUD_API_URL`, then `https://api.4lock.net`.",
 				Validators: []validator.String{
-					stringvalidator.Any(
-						stringvalidator.RegexMatches(apiURLPattern(), "must be an absolute HTTP(S) URL"),
-					),
+					apiURLValidator{},
 				},
 			},
 		},

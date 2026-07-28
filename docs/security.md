@@ -8,5 +8,8 @@
 - Application resources accept secret IDs only.
 - All mutations use an idempotency key. Only classified transient responses are
   retried.
-- API request and correlation IDs are retained in diagnostics and operation state;
-  credentials are redacted.
+- Remote API URLs must use HTTPS. Plain HTTP is accepted only for `localhost` and
+  loopback addresses used by local development and acceptance tests.
+- Trace logs include method, path, attempt, status, request ID, and operation state.
+  Request bodies, authorization headers, service tokens, JWTs, and idempotency
+  keys are never logged; reflected credentials are redacted from diagnostics.

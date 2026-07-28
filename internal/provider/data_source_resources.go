@@ -32,10 +32,6 @@ type applicationInstancesDataSource struct{ dataSourceBase }
 type applicationInstanceDataSource struct{ dataSourceBase }
 type operationDataSource struct{ dataSourceBase }
 
-type idModel struct {
-	ID types.String `tfsdk:"id"`
-}
-
 type projectListModel struct {
 	Projects types.List `tfsdk:"projects"`
 }
@@ -86,16 +82,16 @@ func (d *projectsDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 	}
 }
 func (d *projectsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
-	var page client.Page[client.Project]
-	if err := d.client.Do(ctx, http.MethodGet, "/v1/projects", nil, &page, ""); err != nil {
+	projects, err := client.ListAll[client.Project](ctx, d.client, "/v1/projects")
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to list VAppCloud projects", err.Error())
 		return
 	}
-	values := make([]attr.Value, 0, len(page.Items))
-	for _, project := range page.Items {
+	values := make([]attr.Value, 0, len(projects))
+	for _, project := range projects {
 		value, diags := types.ObjectValue(projectObjectTypes, map[string]attr.Value{
 			"id": types.StringValue(project.ID), "name": types.StringValue(project.Name),
-			"description": types.StringValue(project.Description), "resource_version": types.Int64Value(project.ResourceVersion),
+			"description": types.StringValue(project.Description), "resource_version": types.Int64Value(project.ResourceVersion.Int64()),
 			"created_at": formatTime(project.CreatedAt), "updated_at": formatTime(project.UpdatedAt),
 		})
 		resp.Diagnostics.Append(diags...)
@@ -129,7 +125,7 @@ func (d *projectDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	}
 	state.Name = types.StringValue(project.Name)
 	state.Description = types.StringValue(project.Description)
-	state.ResourceVersion = types.Int64Value(project.ResourceVersion)
+	state.ResourceVersion = types.Int64Value(project.ResourceVersion.Int64())
 	state.CreatedAt = formatTime(project.CreatedAt)
 	state.UpdatedAt = formatTime(project.UpdatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -170,19 +166,21 @@ func (d *devicesDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var page client.Page[client.Device]
 	path := "/v1/devices?project_id=" + url.QueryEscape(state.ProjectID.ValueString())
-	if err := d.client.Do(ctx, http.MethodGet, path, nil, &page, ""); err != nil {
+	items, err := client.ListAll[client.Device](ctx, d.client, path)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to list devices", err.Error())
 		return
 	}
-	values := make([]attr.Value, 0, len(page.Items))
-	for _, item := range page.Items {
+	values := make([]attr.Value, 0, len(items))
+	for _, item := range items {
 		value, diags := summaryValue(item.ID, item.ProjectID, "", item.Name, item.State, item.DefaultVMMID, false, "")
 		resp.Diagnostics.Append(diags...)
 		values = append(values, value)
 	}
-	state.Items, _ = types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	list, diags := types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	resp.Diagnostics.Append(diags...)
+	state.Items = list
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -198,19 +196,21 @@ func (d *computeInstancesDataSource) Read(ctx context.Context, req datasource.Re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var page client.Page[client.ComputeInstance]
 	endpoint := "/v1/compute-instances?project_id=" + url.QueryEscape(state.ProjectID.ValueString())
-	if err := d.client.Do(ctx, http.MethodGet, endpoint, nil, &page, ""); err != nil {
+	items, err := client.ListAll[client.ComputeInstance](ctx, d.client, endpoint)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to list compute instances", err.Error())
 		return
 	}
-	values := make([]attr.Value, 0, len(page.Items))
-	for _, item := range page.Items {
+	values := make([]attr.Value, 0, len(items))
+	for _, item := range items {
 		value, diags := summaryValue(item.ID, item.ProjectID, item.DeviceID, item.Name, item.State, item.DefaultVMMID, false, "")
 		resp.Diagnostics.Append(diags...)
 		values = append(values, value)
 	}
-	state.Items, _ = types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	list, diags := types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	resp.Diagnostics.Append(diags...)
+	state.Items = list
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -226,19 +226,21 @@ func (d *vmmsDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var page client.Page[client.VMM]
 	endpoint := "/v1/vmms?project_id=" + url.QueryEscape(state.ProjectID.ValueString())
-	if err := d.client.Do(ctx, http.MethodGet, endpoint, nil, &page, ""); err != nil {
+	items, err := client.ListAll[client.VMM](ctx, d.client, endpoint)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to list VMMs", err.Error())
 		return
 	}
-	values := make([]attr.Value, 0, len(page.Items))
-	for _, item := range page.Items {
+	values := make([]attr.Value, 0, len(items))
+	for _, item := range items {
 		value, diags := summaryValue(item.ID, item.ProjectID, item.DeviceID, item.Name, item.State, "", item.IsDefault, item.Management)
 		resp.Diagnostics.Append(diags...)
 		values = append(values, value)
 	}
-	state.Items, _ = types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	list, diags := types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	resp.Diagnostics.Append(diags...)
+	state.Items = list
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -254,19 +256,21 @@ func (d *applicationInstancesDataSource) Read(ctx context.Context, req datasourc
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var page client.Page[client.ApplicationInstance]
 	endpoint := "/v1/application-instances?project_id=" + url.QueryEscape(state.ProjectID.ValueString())
-	if err := d.client.Do(ctx, http.MethodGet, endpoint, nil, &page, ""); err != nil {
+	items, err := client.ListAll[client.ApplicationInstance](ctx, d.client, endpoint)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to list application instances", err.Error())
 		return
 	}
-	values := make([]attr.Value, 0, len(page.Items))
-	for _, item := range page.Items {
+	values := make([]attr.Value, 0, len(items))
+	for _, item := range items {
 		value, diags := summaryValue(item.ID, item.ProjectID, "", item.Name, item.State, "", false, "")
 		resp.Diagnostics.Append(diags...)
 		values = append(values, value)
 	}
-	state.Items, _ = types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	list, diags := types.ListValue(types.ObjectType{AttrTypes: resourceSummaryTypes}, values)
+	resp.Diagnostics.Append(diags...)
+	state.Items = list
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -276,87 +280,6 @@ func summaryValue(id, projectID, deviceID, name, state, defaultVMMID string, isD
 		"name": types.StringValue(name), "state": types.StringValue(state), "default_vmm_id": stringOrNull(defaultVMMID),
 		"is_default": types.BoolValue(isDefault), "management": stringOrNull(management),
 	})
-}
-
-func detailSchema(kind string) schema.Schema {
-	return schema.Schema{MarkdownDescription: "Reads a " + kind + " by opaque public ID.", Attributes: map[string]schema.Attribute{
-		"id": schema.StringAttribute{Required: true}, "json": schema.StringAttribute{Computed: true, MarkdownDescription: "Redacted canonical JSON representation of the resource."},
-	}}
-}
-
-type jsonDetailModel struct {
-	ID   types.String `tfsdk:"id"`
-	JSON types.String `tfsdk:"json"`
-}
-
-func (d *deviceDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_device"
-}
-func (d *deviceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = detailSchema("device")
-}
-func (d *deviceDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	readJSONDetail(ctx, d.client, "/v1/devices/", req, resp)
-}
-
-func (d *computeInstanceDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_compute_instance"
-}
-func (d *computeInstanceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = detailSchema("compute instance")
-}
-func (d *computeInstanceDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	readJSONDetail(ctx, d.client, "/v1/compute-instances/", req, resp)
-}
-
-func (d *vmmDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_vmm"
-}
-func (d *vmmDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = detailSchema("VMM, including system-managed defaults")
-}
-func (d *vmmDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	readJSONDetail(ctx, d.client, "/v1/vmms/", req, resp)
-}
-
-func (d *applicationInstanceDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_application_instance"
-}
-func (d *applicationInstanceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = detailSchema("application instance")
-}
-func (d *applicationInstanceDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	readJSONDetail(ctx, d.client, "/v1/application-instances/", req, resp)
-}
-
-func (d *operationDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_operation"
-}
-func (d *operationDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	resp.Schema = detailSchema("durable operation")
-}
-func (d *operationDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	readJSONDetail(ctx, d.client, "/v1/operations/", req, resp)
-}
-
-func readJSONDetail(ctx context.Context, c *client.Client, prefix string, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	var state jsonDetailModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	var raw any
-	if err := c.Do(ctx, http.MethodGet, prefix+client.Escape(state.ID.ValueString()), nil, &raw, ""); err != nil {
-		resp.Diagnostics.AddError("Unable to read VAppCloud resource", err.Error())
-		return
-	}
-	encoded, err := canonicalJSON(raw)
-	if err != nil {
-		resp.Diagnostics.AddError("Unable to encode VAppCloud resource", err.Error())
-		return
-	}
-	state.JSON = types.StringValue(encoded)
-	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 var (

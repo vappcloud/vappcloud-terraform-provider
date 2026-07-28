@@ -3,20 +3,23 @@ package client
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
-	mathrand "math/rand"
+	rand "math/rand/v2"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 const (
@@ -33,7 +36,6 @@ type Client struct {
 	http         *http.Client
 	mu           sync.Mutex
 	sleep        func(context.Context, time.Duration) error
-	random       *mathrand.Rand
 }
 
 type tokenResponse struct {
@@ -45,9 +47,9 @@ func New(baseURL, token, version string) (*Client, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("VAppCloud token is required")
 	}
-	u, err := url.Parse(strings.TrimRight(baseURL, "/"))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("invalid VAppCloud API URL %q", baseURL)
+	u, err := ValidateBaseURL(baseURL)
+	if err != nil {
+		return nil, err
 	}
 	return &Client{
 		baseURL:   u,
@@ -64,8 +66,29 @@ func New(baseURL, token, version string) (*Client, error) {
 				return nil
 			}
 		},
-		random: mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
 	}, nil
+}
+
+// ValidateBaseURL requires encrypted transport for remote APIs while retaining
+// HTTP support for local acceptance and development servers.
+func ValidateBaseURL(baseURL string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("invalid VAppCloud API URL %q", baseURL)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("VAppCloud API URL must not contain credentials, a query, or a fragment")
+	}
+	if u.Scheme != "https" {
+		host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+		addr, addrErr := netip.ParseAddr(host)
+		local := host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+			(addrErr == nil && addr.IsLoopback())
+		if u.Scheme != "http" || !local {
+			return nil, errors.New("VAppCloud API URL must use HTTPS unless the host is localhost or a loopback address")
+		}
+	}
+	return u, nil
 }
 
 func (c *Client) SetHTTPClient(h *http.Client) {
@@ -73,7 +96,7 @@ func (c *Client) SetHTTPClient(h *http.Client) {
 }
 
 func (c *Client) authToken(ctx context.Context) (string, error) {
-	if strings.Count(c.token, ".") == 2 {
+	if !strings.HasPrefix(c.token, "vappsvc_") {
 		return c.token, nil
 	}
 	c.mu.Lock()
@@ -92,7 +115,7 @@ func (c *Client) authToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("exchange service token: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		return "", decodeAPIError(res)
 	}
@@ -128,7 +151,10 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 		return errors.New("mutation requires an idempotency key")
 	}
 
+	reauthenticated := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		logFields := map[string]any{"method": method, "path": path, "attempt": attempt + 1}
+		tflog.Trace(ctx, "VAppCloud API request", logFields)
 		req, reqErr := http.NewRequestWithContext(ctx, method, c.baseURL.String()+path, bytes.NewReader(encoded))
 		if reqErr != nil {
 			return reqErr
@@ -144,6 +170,9 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 		}
 		res, doErr := c.http.Do(req)
 		if doErr != nil {
+			tflog.Trace(ctx, "VAppCloud API transport error", map[string]any{
+				"method": method, "path": path, "attempt": attempt + 1,
+			})
 			if attempt == maxAttempts-1 {
 				return fmt.Errorf("VAppCloud API request failed: %w", doErr)
 			}
@@ -153,20 +182,31 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 			continue
 		}
 
+		requestID := res.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = res.Header.Get("X-Correlation-ID")
+		}
+		tflog.Trace(ctx, "VAppCloud API response", map[string]any{
+			"method": method, "path": path, "attempt": attempt + 1,
+			"status_code": res.StatusCode, "request_id": requestID,
+		})
 		if res.StatusCode/100 == 2 {
-			defer res.Body.Close()
 			if out == nil || res.StatusCode == http.StatusNoContent {
 				_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+				_ = res.Body.Close()
 				return nil
 			}
 			if err := json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(out); err != nil {
+				_ = res.Body.Close()
 				return fmt.Errorf("decode VAppCloud API response: %w", err)
 			}
+			_ = res.Body.Close()
 			return nil
 		}
 
 		apiErr := decodeAPIError(res)
-		if res.StatusCode == http.StatusUnauthorized && strings.Count(c.token, ".") != 2 && attempt == 0 {
+		if res.StatusCode == http.StatusUnauthorized && strings.HasPrefix(c.token, "vappsvc_") && !reauthenticated {
+			reauthenticated = true
 			c.mu.Lock()
 			c.jwt = ""
 			c.jwtExpiresAt = time.Time{}
@@ -201,7 +241,7 @@ func redact(value string, secrets ...string) string {
 }
 
 func decodeAPIError(res *http.Response) *APIError {
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	e := &APIError{
 		StatusCode: res.StatusCode,
 		Code:       http.StatusText(res.StatusCode),
@@ -210,6 +250,7 @@ func decodeAPIError(res *http.Response) *APIError {
 		Retryable:  res.StatusCode == 429 || res.StatusCode == 502 || res.StatusCode == 503 || res.StatusCode == 504,
 	}
 	_ = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(e)
+	e.Retryable = res.StatusCode == 429 || res.StatusCode == 502 || res.StatusCode == 503 || res.StatusCode == 504
 	if e.Code == "" {
 		e.Code = http.StatusText(res.StatusCode)
 	}
@@ -240,16 +281,20 @@ func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {
 		return retryAfter
 	}
 	base := math.Min(30, math.Pow(2, float64(attempt)))
-	jitter := 0.75 + c.random.Float64()*0.5
+	jitter := 0.75 + rand.Float64()*0.5
 	return time.Duration(base * jitter * float64(time.Second))
 }
 
-func IdempotencyKey() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("tf-%d", time.Now().UnixNano())
+// StableIdempotencyKey derives a replay key from the Terraform operation and
+// its desired payload. The same apply replay therefore presents the same key,
+// including when the first HTTP response is lost after the API commits.
+func StableIdempotencyKey(resourceType, resourceID string, payload any) (string, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode idempotency payload: %w", err)
 	}
-	return "tf-" + hex.EncodeToString(b)
+	sum := sha256.Sum256(append([]byte(resourceType+"\x00"+resourceID+"\x00"), encoded...))
+	return "tf-" + hex.EncodeToString(sum[:]), nil
 }
 
 func Escape(id string) string {
@@ -261,7 +306,11 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
-func IsFailedPrecondition(err error) bool {
+func IsVersionConflict(err error) bool {
 	var apiErr *APIError
-	return errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusPreconditionFailed || apiErr.Code == "FAILED_PRECONDITION")
+	return errors.As(err, &apiErr) &&
+		(apiErr.StatusCode == http.StatusConflict ||
+			apiErr.StatusCode == http.StatusPreconditionFailed ||
+			apiErr.Code == "ABORTED" ||
+			apiErr.Code == "FAILED_PRECONDITION")
 }

@@ -43,7 +43,8 @@ resource "vappcloud_vmm" "secondary" {
 ### Optional
 
 - `deletion_protection` (Boolean) API-enforced deletion protection.
-- `retain_disk` (Boolean) Preserve the root disk as an auditable retained-storage record when the VMM is deleted.
+- `retain_disk` (Boolean) Delete policy persisted by the API. When true, the root disk is preserved as auditable retained storage on a future destroy; changing it does not alter a running VMM.
+- `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
 
@@ -61,3 +62,22 @@ resource "vappcloud_vmm" "secondary" {
 - `resource_version` (Number) Optimistic concurrency version.
 - `state` (String) Runtime state.
 - `updated_at` (String) Last update timestamp in RFC3339 format.
+
+<a id="nestedatt--timeouts"></a>
+### Nested Schema for `timeouts`
+
+Optional:
+
+- `create` (String) Maximum time to wait for the create operation. Accepts Go duration syntax such as `30s` or `2h45m`; defaults to `20m0s`.
+- `delete` (String) Maximum time to wait for the delete operation. Accepts Go duration syntax such as `30s` or `2h45m`; defaults to `20m0s`.
+- `update` (String) Maximum time to wait for the update operation. Accepts Go duration syntax such as `30s` or `2h45m`; defaults to `20m0s`.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import vappcloud_vmm.secondary project_example/vmm_example
+```

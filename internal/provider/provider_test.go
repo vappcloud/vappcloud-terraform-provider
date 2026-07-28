@@ -2,10 +2,17 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+
+	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
 )
 
 func TestProviderContract(t *testing.T) {
@@ -37,5 +44,68 @@ func TestProviderContract(t *testing.T) {
 	}
 	if len(p.DataSources(context.Background())) != 20 {
 		t.Fatalf("expected 20 data sources, got %d", len(p.DataSources(context.Background())))
+	}
+}
+
+func TestCompleteMutationRejectsFailedOperation(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(client.Operation{
+			ID: "op-failed", State: "failed",
+			Error: &client.APIError{Code: "PROVISIONING_FAILED", Message: "fixture failure"},
+		})
+	}))
+	defer server.Close()
+	c, err := client.New(server.URL, "opaque-token", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := client.Mutation[client.VMM]{
+		Resource:    client.VMM{ID: "vmm-test"},
+		OperationID: "op-failed",
+	}
+	var diagnostics diag.Diagnostics
+	if completeMutation(context.Background(), c, &result, time.Second,
+		func(vmm client.VMM) string { return vmm.ID },
+		func(id string) string { return "/v1/vmms/" + id },
+		&diagnostics,
+	) {
+		t.Fatal("failed operation was treated as successful")
+	}
+	if !diagnostics.HasError() {
+		t.Fatal("failed operation did not produce diagnostics")
+	}
+}
+
+func TestCompleteMutationRecoversResourceByOperationID(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/operations/op-complete":
+			_ = json.NewEncoder(w).Encode(client.Operation{
+				ID: "op-complete", ResourceID: "vmm-recovered", State: "succeeded",
+			})
+		case "/v1/vmms/vmm-recovered":
+			_ = json.NewEncoder(w).Encode(client.VMM{ID: "vmm-recovered", ResourceVersion: 1})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	c, err := client.New(server.URL, "opaque-token", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := client.Mutation[client.VMM]{OperationID: "op-complete"}
+	var diagnostics diag.Diagnostics
+	if !completeMutation(context.Background(), c, &result, time.Second,
+		func(vmm client.VMM) string { return vmm.ID },
+		func(id string) string { return "/v1/vmms/" + id },
+		&diagnostics,
+	) {
+		t.Fatalf("resource recovery failed: %v", diagnostics)
+	}
+	if result.Resource.ID != "vmm-recovered" {
+		t.Fatalf("unexpected recovered resource: %+v", result.Resource)
 	}
 }

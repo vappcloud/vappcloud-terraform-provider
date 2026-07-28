@@ -34,6 +34,7 @@ type Operation struct {
 	ResourceID    string         `json:"resource_id"`
 	Kind          string         `json:"kind"`
 	State         string         `json:"state"`
+	RequestID     string         `json:"request_id,omitempty"`
 	Error         *APIError      `json:"error,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -65,7 +66,7 @@ type Project struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
 	Description     string    `json:"description,omitempty"`
-	ResourceVersion int64     `json:"resource_version"`
+	ResourceVersion Version   `json:"resource_version"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -76,7 +77,7 @@ type Device struct {
 	Name            string    `json:"name"`
 	State           string    `json:"state"`
 	DefaultVMMID    string    `json:"default_vmm_id,omitempty"`
-	ResourceVersion int64     `json:"resource_version"`
+	ResourceVersion Version   `json:"resource_version"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -92,7 +93,7 @@ type ComputeInstance struct {
 	Image           string    `json:"image"`
 	Name            string    `json:"name"`
 	State           string    `json:"state"`
-	ResourceVersion int64     `json:"resource_version"`
+	ResourceVersion Version   `json:"resource_version"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -111,9 +112,9 @@ type VMM struct {
 	Management         string    `json:"management"`
 	State              string    `json:"state"`
 	Health             string    `json:"health"`
-	DesiredRevision    int64     `json:"desired_revision"`
-	ObservedRevision   int64     `json:"observed_revision"`
-	ResourceVersion    int64     `json:"resource_version"`
+	DesiredRevision    Version   `json:"desired_revision"`
+	ObservedRevision   Version   `json:"observed_revision"`
+	ResourceVersion    Version   `json:"resource_version"`
 	Operation          Operation `json:"operation"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -144,7 +145,7 @@ type ApplicationInstance struct {
 	State           string            `json:"state"`
 	ReadyReplicas   int64             `json:"ready_replicas"`
 	DesiredReplicas int64             `json:"desired_replicas"`
-	ResourceVersion int64             `json:"resource_version"`
+	ResourceVersion Version           `json:"resource_version"`
 	Operation       Operation         `json:"operation"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`

@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"net/url"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -79,7 +78,11 @@ func (d *namedListDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 				Attributes: map[string]schema.Attribute{
 					"id": schema.StringAttribute{Computed: true}, "name": schema.StringAttribute{Computed: true},
 					"description": schema.StringAttribute{Computed: true}, "state": schema.StringAttribute{Computed: true},
-					"metadata_json": schema.StringAttribute{Computed: true},
+					"metadata_json": schema.StringAttribute{
+						Computed:            true,
+						Sensitive:           true,
+						MarkdownDescription: "Canonical catalog metadata. Marked sensitive because provider-defined metadata is not schema-constrained.",
+					},
 				},
 			}},
 		},
@@ -102,13 +105,13 @@ func (d *namedListDataSource) Read(ctx context.Context, req datasource.ReadReque
 	if encoded := query.Encode(); encoded != "" {
 		endpoint += "?" + encoded
 	}
-	var page client.Page[client.NamedItem]
-	if err := d.client.Do(ctx, http.MethodGet, endpoint, nil, &page, ""); err != nil {
+	catalogItems, err := client.ListAll[client.NamedItem](ctx, d.client, endpoint)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to read VAppCloud catalog", err.Error())
 		return
 	}
-	values := make([]attr.Value, 0, len(page.Items))
-	for _, item := range page.Items {
+	values := make([]attr.Value, 0, len(catalogItems))
+	for _, item := range catalogItems {
 		metadataValue := item.Metadata
 		if item.MetadataJSON != "" {
 			if err := json.Unmarshal([]byte(item.MetadataJSON), &metadataValue); err != nil {

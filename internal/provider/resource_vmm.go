@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -21,27 +22,28 @@ import (
 type vmmResource struct{ resourceBase }
 
 type vmmResourceModel struct {
-	ID                 types.String `tfsdk:"id"`
-	ProjectID          types.String `tfsdk:"project_id"`
-	DeviceID           types.String `tfsdk:"device_id"`
-	Name               types.String `tfsdk:"name"`
-	CPUCores           types.Int64  `tfsdk:"cpu_cores"`
-	MemoryMB           types.Int64  `tfsdk:"memory_mb"`
-	DeletionProtection types.Bool   `tfsdk:"deletion_protection"`
-	RetainDisk         types.Bool   `tfsdk:"retain_disk"`
-	IsDefault          types.Bool   `tfsdk:"is_default"`
-	Management         types.String `tfsdk:"management"`
-	State              types.String `tfsdk:"state"`
-	Health             types.String `tfsdk:"health"`
-	DiskMB             types.Int64  `tfsdk:"disk_mb"`
-	DesiredRevision    types.Int64  `tfsdk:"desired_revision"`
-	ObservedRevision   types.Int64  `tfsdk:"observed_revision"`
-	OperationStatus    types.String `tfsdk:"operation_status"`
-	OperationID        types.String `tfsdk:"operation_id"`
-	CorrelationID      types.String `tfsdk:"correlation_id"`
-	ResourceVersion    types.Int64  `tfsdk:"resource_version"`
-	CreatedAt          types.String `tfsdk:"created_at"`
-	UpdatedAt          types.String `tfsdk:"updated_at"`
+	ID                 types.String      `tfsdk:"id"`
+	ProjectID          types.String      `tfsdk:"project_id"`
+	DeviceID           types.String      `tfsdk:"device_id"`
+	Name               types.String      `tfsdk:"name"`
+	CPUCores           types.Int64       `tfsdk:"cpu_cores"`
+	MemoryMB           types.Int64       `tfsdk:"memory_mb"`
+	DeletionProtection types.Bool        `tfsdk:"deletion_protection"`
+	RetainDisk         types.Bool        `tfsdk:"retain_disk"`
+	IsDefault          types.Bool        `tfsdk:"is_default"`
+	Management         types.String      `tfsdk:"management"`
+	State              types.String      `tfsdk:"state"`
+	Health             types.String      `tfsdk:"health"`
+	DiskMB             types.Int64       `tfsdk:"disk_mb"`
+	DesiredRevision    types.Int64       `tfsdk:"desired_revision"`
+	ObservedRevision   types.Int64       `tfsdk:"observed_revision"`
+	OperationStatus    types.String      `tfsdk:"operation_status"`
+	OperationID        types.String      `tfsdk:"operation_id"`
+	CorrelationID      types.String      `tfsdk:"correlation_id"`
+	ResourceVersion    types.Int64       `tfsdk:"resource_version"`
+	CreatedAt          types.String      `tfsdk:"created_at"`
+	UpdatedAt          types.String      `tfsdk:"updated_at"`
+	Timeouts           operationTimeouts `tfsdk:"timeouts"`
 }
 
 func NewVMMResource() resource.Resource { return &vmmResource{} }
@@ -50,7 +52,7 @@ func (r *vmmResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 	resp.TypeName = req.ProviderTypeName + "_vmm"
 }
 
-func (r *vmmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *vmmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	positive := []validator.Int64{int64validator.AtLeast(1)}
 	resp.Schema = schema.Schema{
 		Version: 1,
@@ -72,7 +74,7 @@ func (r *vmmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"retain_disk": schema.BoolAttribute{
 				Optional: true, Computed: true, Default: booldefault.StaticBool(false),
-				MarkdownDescription: "Preserve the root disk as an auditable retained-storage record when the VMM is deleted.",
+				MarkdownDescription: "Delete policy persisted by the API. When true, the root disk is preserved as auditable retained storage on a future destroy; changing it does not alter a running VMM.",
 			},
 			"is_default":        schema.BoolAttribute{Computed: true, MarkdownDescription: "Always false for managed resources."},
 			"management":        computedString("Management owner: terraform, console, external, or system."),
@@ -84,6 +86,7 @@ func (r *vmmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"operation_status":  computedString("Latest asynchronous operation state."),
 			"operation_id":      computedString("Latest asynchronous operation ID."),
 			"correlation_id":    computedString("Latest operation correlation ID."),
+			"timeouts":          timeoutAttributes(ctx, operationTimeout),
 		}),
 	}
 }
@@ -94,8 +97,11 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var result client.Mutation[client.VMM]
-	err := r.client.Do(ctx, http.MethodPost, "/v1/vmms", map[string]any{
+	timeout := createTimeout(ctx, plan.Timeouts, operationTimeout, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	payload := map[string]any{
 		"project_id":          plan.ProjectID.ValueString(),
 		"device_id":           plan.DeviceID.ValueString(),
 		"name":                plan.Name.ValueString(),
@@ -104,27 +110,27 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 		"deletion_protection": plan.DeletionProtection.ValueBool(),
 		"retain_disk":         plan.RetainDisk.ValueBool(),
 		"terraform_owned":     true,
-	}, &result, client.IdempotencyKey())
+	}
+	key := mutationKey(&resp.Diagnostics, "vappcloud_vmm.create", "", payload)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var result client.Mutation[client.VMM]
+	err := r.client.Do(ctx, http.MethodPost, "/v1/vmms", payload, &result, key)
 	if err != nil {
 		addMutationDiagnostic(&resp.Diagnostics, "create", err)
+		return
+	}
+	if !completeMutation(ctx, r.client, &result, timeout,
+		func(vmm client.VMM) string { return vmm.ID },
+		func(id string) string { return "/v1/vmms/" + client.Escape(id) },
+		&resp.Diagnostics,
+	) {
 		return
 	}
 	if result.Resource.IsDefault {
 		resp.Diagnostics.AddError("Default VMM cannot be managed", "The API returned a system-managed default VMM for a create request.")
 		return
-	}
-	waitMutation(ctx, r.client, result.Operation, result.OperationID, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	if result.Resource.ID == "" {
-		var current client.VMM
-		resourceID := result.Operation.ResourceID
-		if err := r.client.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(resourceID), nil, &current, ""); err != nil {
-			addMutationDiagnostic(&resp.Diagnostics, "read created", err)
-			return
-		}
-		result.Resource = current
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -150,32 +156,48 @@ func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan vmmResourceModel
+	var state vmmResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	timeout := updateTimeout(ctx, plan.Timeouts, operationTimeout, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	var result client.Mutation[client.VMM]
-	err := r.client.Do(ctx, http.MethodPatch, "/v1/vmms/"+client.Escape(plan.ID.ValueString()), map[string]any{
-		"name":                plan.Name.ValueString(),
-		"cpu_cores":           plan.CPUCores.ValueInt64(),
-		"memory_mb":           plan.MemoryMB.ValueInt64(),
-		"deletion_protection": plan.DeletionProtection.ValueBool(),
-		"retain_disk":         plan.RetainDisk.ValueBool(),
-		"resource_version":    plan.ResourceVersion.ValueInt64(),
-	}, &result, client.IdempotencyKey())
+	id := state.ID.ValueString()
+	mutate := func(version client.Version) error {
+		payload := map[string]any{
+			"name":                plan.Name.ValueString(),
+			"cpu_cores":           plan.CPUCores.ValueInt64(),
+			"memory_mb":           plan.MemoryMB.ValueInt64(),
+			"deletion_protection": plan.DeletionProtection.ValueBool(),
+			"retain_disk":         plan.RetainDisk.ValueBool(),
+			"resource_version":    version,
+		}
+		key := mutationKey(&resp.Diagnostics, "vappcloud_vmm.update", id, payload)
+		if resp.Diagnostics.HasError() {
+			return errors.New("unable to derive idempotency key")
+		}
+		return r.client.Do(ctx, http.MethodPatch, "/v1/vmms/"+client.Escape(id), payload, &result, key)
+	}
+	err := mutateWithVersionRetry(client.Version(state.ResourceVersion.ValueInt64()), func() (client.Version, error) {
+		var current client.VMM
+		err := r.client.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(id), nil, &current, "")
+		return current.ResourceVersion, err
+	}, mutate)
 	if err != nil {
 		addMutationDiagnostic(&resp.Diagnostics, "update", err)
 		return
 	}
-	waitMutation(ctx, r.client, result.Operation, result.OperationID, &resp.Diagnostics)
-	if resp.Diagnostics.HasError() {
+	if !completeMutation(ctx, r.client, &result, timeout,
+		func(vmm client.VMM) string { return vmm.ID },
+		func(id string) string { return "/v1/vmms/" + client.Escape(id) },
+		&resp.Diagnostics,
+	) {
 		return
-	}
-	if result.Resource.ID == "" {
-		if err := r.client.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(plan.ID.ValueString()), nil, &result.Resource, ""); err != nil {
-			addMutationDiagnostic(&resp.Diagnostics, "read updated", err)
-			return
-		}
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -187,15 +209,32 @@ func (r *vmmResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	timeout := deleteTimeout(ctx, state.Timeouts, operationTimeout, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	if state.IsDefault.ValueBool() {
 		resp.Diagnostics.AddError("Default VMM cannot be destroyed", "Default VMM lifecycle is bound to its device.")
 		return
 	}
 	var result client.Mutation[client.VMM]
-	endpoint := "/v1/vmms/" + client.Escape(state.ID.ValueString()) +
-		"?resource_version=" + strconv.FormatInt(state.ResourceVersion.ValueInt64(), 10) +
-		"&retain_disk=" + strconv.FormatBool(state.RetainDisk.ValueBool())
-	err := r.client.Do(ctx, http.MethodDelete, endpoint, nil, &result, client.IdempotencyKey())
+	id := state.ID.ValueString()
+	mutate := func(version client.Version) error {
+		payload := map[string]any{"resource_version": version, "retain_disk": state.RetainDisk.ValueBool()}
+		key := mutationKey(&resp.Diagnostics, "vappcloud_vmm.delete", id, payload)
+		if resp.Diagnostics.HasError() {
+			return errors.New("unable to derive idempotency key")
+		}
+		endpoint := "/v1/vmms/" + client.Escape(id) +
+			"?resource_version=" + strconv.FormatInt(version.Int64(), 10) +
+			"&retain_disk=" + strconv.FormatBool(state.RetainDisk.ValueBool())
+		return r.client.Do(ctx, http.MethodDelete, endpoint, nil, &result, key)
+	}
+	err := mutateWithVersionRetry(client.Version(state.ResourceVersion.ValueInt64()), func() (client.Version, error) {
+		var current client.VMM
+		err := r.client.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(id), nil, &current, "")
+		return current.ResourceVersion, err
+	}, mutate)
 	if client.IsNotFound(err) {
 		return
 	}
@@ -203,7 +242,7 @@ func (r *vmmResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 		addMutationDiagnostic(&resp.Diagnostics, "delete", err)
 		return
 	}
-	waitMutation(ctx, r.client, result.Operation, result.OperationID, &resp.Diagnostics)
+	_, _ = waitMutation(ctx, r.client, result.Operation, result.OperationID, timeout, &resp.Diagnostics)
 }
 
 func (r *vmmResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -243,9 +282,9 @@ func vmmToState(vmm client.VMM, state *vmmResourceModel) {
 	state.Management = types.StringValue(vmm.Management)
 	state.State = types.StringValue(vmm.State)
 	state.Health = types.StringValue(vmm.Health)
-	state.DesiredRevision = types.Int64Value(vmm.DesiredRevision)
-	state.ObservedRevision = types.Int64Value(vmm.ObservedRevision)
-	state.ResourceVersion = types.Int64Value(vmm.ResourceVersion)
+	state.DesiredRevision = types.Int64Value(vmm.DesiredRevision.Int64())
+	state.ObservedRevision = types.Int64Value(vmm.ObservedRevision.Int64())
+	state.ResourceVersion = types.Int64Value(vmm.ResourceVersion.Int64())
 	state.OperationStatus = types.StringValue(vmm.Operation.State)
 	state.OperationID = types.StringValue(vmm.Operation.ID)
 	state.CorrelationID = types.StringValue(vmm.Operation.CorrelationID)

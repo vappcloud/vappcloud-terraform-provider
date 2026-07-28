@@ -40,6 +40,8 @@ release:
   github:
     owner: vappcloud
     name: vappcloud-terraform-provider
+  extra_files:
+    - glob: terraform-registry-manifest.json
 
 changelog:
   use: github-native

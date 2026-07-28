@@ -47,6 +47,7 @@ resource "vappcloud_application_instance" "nginx" {
 
 - `description` (String) Mutable description.
 - `secret_ids` (Set of String) References to preconfigured secret IDs. Secret values are never accepted or stored.
+- `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only
 
@@ -67,7 +68,7 @@ resource "vappcloud_application_instance" "nginx" {
 Required:
 
 - `replica_count` (Number) Replicas placed on this VMM.
-- `vmm_id` (String) Target VMM ID.
+- `vmm_id` (String) Target VMM ID. Changing placement identity replaces the deployment.
 
 
 <a id="nestedatt--source"></a>
@@ -84,3 +85,23 @@ Optional:
 - `marketplace_version_id` (String)
 - `ref` (String)
 - `repository` (String)
+
+
+<a id="nestedatt--timeouts"></a>
+### Nested Schema for `timeouts`
+
+Optional:
+
+- `create` (String) Maximum time to wait for the create operation. Accepts Go duration syntax such as `30s` or `2h45m`; defaults to `20m0s`.
+- `delete` (String) Maximum time to wait for the delete operation. Accepts Go duration syntax such as `30s` or `2h45m`; defaults to `20m0s`.
+- `update` (String) Maximum time to wait for the update operation. Accepts Go duration syntax such as `30s` or `2h45m`; defaults to `20m0s`.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+terraform import vappcloud_application_instance.nginx project_example/application_instance_example
+```

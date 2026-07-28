@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 func (c *Client) WaitOperation(ctx context.Context, operationID string, timeout time.Duration) (Operation, error) {
@@ -20,6 +22,10 @@ func (c *Client) WaitOperation(ctx context.Context, operationID string, timeout 
 		if err != nil {
 			return op, err
 		}
+		tflog.Trace(ctx, "VAppCloud operation poll", map[string]any{
+			"operation_id": operationID,
+			"state":        op.State,
+		})
 		switch op.State {
 		case "succeeded":
 			return op, nil
