@@ -81,7 +81,7 @@ func TestStableIdempotencyKey(t *testing.T) {
 
 func TestServiceTokenExchangeAndRedaction(t *testing.T) {
 	t.Parallel()
-	const secret = "vappsvc_super_secret_value"
+	const secret = "vappsvc_fixture_redacted"
 	var exchanges atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

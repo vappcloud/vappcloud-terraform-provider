@@ -69,10 +69,11 @@ jobs:
         shell: bash
         env:
           TF_ACC: '1'
-          TF_ACC_TERRAFORM_PATH: ${{ matrix.engine }}
           TF_ACC_PROVIDER_HOST: ${{ matrix.engine == 'tofu' && 'registry.opentofu.org' || 'registry.terraform.io' }}
           TF_ACC_PROVIDER_NAMESPACE: vappcloud
-        run: go test -v -timeout 30m ./internal/provider -run '^TestAcc'
+        run: |
+          TF_ACC_TERRAFORM_PATH="$(command -v '${{ matrix.engine }}')" \
+            go test -v -timeout 30m ./internal/provider -run '^TestAcc'
 
   security:
     runs-on: ubuntu-latest
