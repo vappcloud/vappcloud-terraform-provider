@@ -1,0 +1,6 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform-provider-vappcloud
+dist/
+coverage.out

@@ -1,0 +1,38 @@
+version: '3'
+
+tasks:
+  fmt:
+    cmds:
+      - test -z "$(gofmt -l .)"
+  test:
+    cmds:
+      - go test -race ./...
+  vet:
+    cmds:
+      - go vet ./...
+  build:
+    cmds:
+      - go build ./...
+  docs:
+    cmds:
+      - go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 generate --provider-name vappcloud --rendered-provider-name VAppCloud
+  verify:
+    deps: [fmt, vet, test, build]
+  test:acceptance:terraform:
+    env:
+      TF_ACC: '1'
+      TF_ACC_PROVIDER_HOST: registry.terraform.io
+      TF_ACC_PROVIDER_NAMESPACE: vappcloud
+      TF_ACC_TERRAFORM_PATH:
+        sh: command -v terraform
+    cmds:
+      - go test -v -timeout 30m ./internal/provider -run '^TestAcc'
+  test:acceptance:tofu:
+    env:
+      TF_ACC: '1'
+      TF_ACC_PROVIDER_HOST: registry.opentofu.org
+      TF_ACC_PROVIDER_NAMESPACE: vappcloud
+      TF_ACC_TERRAFORM_PATH:
+        sh: command -v tofu
+    cmds:
+      - go test -v -timeout 30m ./internal/provider -run '^TestAcc'
