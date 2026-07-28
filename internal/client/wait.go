@@ -4,10 +4,28 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
+
+func operationPath(operationID string) string {
+	switch {
+	case strings.HasPrefix(operationID, "op-cmp-"):
+		return "/v1/compute-operations/" + Escape(operationID)
+	case strings.HasPrefix(operationID, "op-app-"):
+		return "/v1/application-operations/" + Escape(operationID)
+	default:
+		return "/v1/operations/" + Escape(operationID)
+	}
+}
+
+func (c *Client) GetOperation(ctx context.Context, operationID string) (Operation, error) {
+	var operation Operation
+	err := c.Do(ctx, http.MethodGet, operationPath(operationID), nil, &operation, "")
+	return operation, err
+}
 
 func (c *Client) WaitOperation(ctx context.Context, operationID string, timeout time.Duration) (Operation, error) {
 	if operationID == "" {
@@ -17,8 +35,7 @@ func (c *Client) WaitOperation(ctx context.Context, operationID string, timeout 
 	defer cancel()
 	delay := time.Second
 	for {
-		var op Operation
-		err := c.Do(waitCtx, http.MethodGet, "/v1/operations/"+Escape(operationID), nil, &op, "")
+		op, err := c.GetOperation(waitCtx, operationID)
 		if err != nil {
 			return op, err
 		}

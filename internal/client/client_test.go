@@ -34,12 +34,13 @@ func TestMutationRequiresIdempotencyKey(t *testing.T) {
 func TestProtobufJSONInt64Scalars(t *testing.T) {
 	t.Parallel()
 	var vmm VMM
-	fixture := `{"id":"vmm-1","cpu_cores":4,"memory_mb":2048,"disk_mb":10240,` +
-		`"desired_revision":"3","observed_revision":"2","resource_version":"7"}`
+	fixture := `{"id":"vmm-1","projectId":"prj-1","deviceId":"dev-1","cpuCores":4,"memoryMb":2048,"diskMb":10240,` +
+		`"desiredRevision":"3","observedRevision":"2","resourceVersion":"7"}`
 	if err := json.Unmarshal([]byte(fixture), &vmm); err != nil {
 		t.Fatal(err)
 	}
-	if vmm.ResourceVersion != 7 || vmm.DesiredRevision != 3 || vmm.CPUCores != 4 {
+	if vmm.ResourceVersion != 7 || vmm.DesiredRevision != 3 || vmm.CPUCores != 4 ||
+		vmm.ProjectID != "prj-1" || vmm.DeviceID != "dev-1" {
 		t.Fatalf("unexpected decoded VMM: %+v", vmm)
 	}
 	payload, err := json.Marshal(map[string]any{
@@ -51,6 +52,20 @@ func TestProtobufJSONInt64Scalars(t *testing.T) {
 	}
 	if got := string(payload); got != `{"cpu_cores":4,"resource_version":"7"}` {
 		t.Fatalf("unexpected protobuf JSON payload: %s", got)
+	}
+}
+
+func TestOperationPath(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"op-cmp-123": "/v1/compute-operations/op-cmp-123",
+		"op-app-456": "/v1/application-operations/op-app-456",
+		"uuid-vmm":   "/v1/operations/uuid-vmm",
+	}
+	for operationID, want := range cases {
+		if got := operationPath(operationID); got != want {
+			t.Fatalf("operationPath(%q) = %q, want %q", operationID, got, want)
+		}
 	}
 }
 

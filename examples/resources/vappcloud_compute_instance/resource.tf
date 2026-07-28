@@ -7,7 +7,7 @@ resource "vappcloud_compute_instance" "worker" {
   image               = "ubuntu-24.04-arm64"
   name                = "worker-01"
 
-  timeouts {
+  timeouts = {
     create = "30m"
     update = "30m"
     delete = "30m"

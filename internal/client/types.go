@@ -10,7 +10,7 @@ type APIError struct {
 	StatusCode int               `json:"-"`
 	Code       string            `json:"code"`
 	Message    string            `json:"message"`
-	RequestID  string            `json:"request_id"`
+	RequestID  string            `json:"requestId"`
 	Retryable  bool              `json:"retryable"`
 	Details    map[string]string `json:"details,omitempty"`
 	RetryAfter time.Duration     `json:"-"`
@@ -25,27 +25,27 @@ func (e *APIError) Error() string {
 
 type Page[T any] struct {
 	Items      []T    `json:"items"`
-	NextCursor string `json:"next_cursor,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type Operation struct {
 	ID            string         `json:"id"`
-	CorrelationID string         `json:"correlation_id"`
-	ResourceID    string         `json:"resource_id"`
+	CorrelationID string         `json:"correlationId"`
+	ResourceID    string         `json:"resourceId"`
 	Kind          string         `json:"kind"`
 	State         string         `json:"state"`
-	RequestID     string         `json:"request_id,omitempty"`
+	RequestID     string         `json:"requestId,omitempty"`
 	Error         *APIError      `json:"error,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	CreatedAt     time.Time      `json:"createdAt"`
+	UpdatedAt     time.Time      `json:"updatedAt"`
 }
 
 type Mutation[T any] struct {
 	Resource      T         `json:"resource"`
 	Operation     Operation `json:"operation"`
-	OperationID   string    `json:"operation_id,omitempty"`
-	CorrelationID string    `json:"correlation_id,omitempty"`
+	OperationID   string    `json:"operationId,omitempty"`
+	CorrelationID string    `json:"correlationId,omitempty"`
 }
 
 // UnmarshalJSON accepts both asynchronous lifecycle envelopes and synchronous resource responses. Compute, VMM,
@@ -66,89 +66,89 @@ type Project struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
 	Description     string    `json:"description,omitempty"`
-	ResourceVersion Version   `json:"resource_version"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ResourceVersion Version   `json:"resourceVersion"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 type Device struct {
 	ID              string    `json:"id"`
-	ProjectID       string    `json:"project_id"`
+	ProjectID       string    `json:"projectId"`
 	Name            string    `json:"name"`
 	State           string    `json:"state"`
-	DefaultVMMID    string    `json:"default_vmm_id,omitempty"`
-	ResourceVersion Version   `json:"resource_version"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	DefaultVMMID    string    `json:"defaultVmmId,omitempty"`
+	ResourceVersion Version   `json:"resourceVersion"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 type ComputeInstance struct {
 	ID              string    `json:"id"`
-	ProjectID       string    `json:"project_id"`
-	DeviceID        string    `json:"device_id"`
-	DefaultVMMID    string    `json:"default_vmm_id,omitempty"`
-	CloudConnection string    `json:"cloud_connection_id"`
+	ProjectID       string    `json:"projectId"`
+	DeviceID        string    `json:"deviceId"`
+	DefaultVMMID    string    `json:"defaultVmmId,omitempty"`
+	CloudConnection string    `json:"cloudConnectionId"`
 	Region          string    `json:"region"`
 	Size            string    `json:"size"`
 	Image           string    `json:"image"`
 	Name            string    `json:"name"`
 	State           string    `json:"state"`
-	ResourceVersion Version   `json:"resource_version"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ResourceVersion Version   `json:"resourceVersion"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 type VMM struct {
 	ID                 string    `json:"id"`
-	ProjectID          string    `json:"project_id"`
-	DeviceID           string    `json:"device_id"`
+	ProjectID          string    `json:"projectId"`
+	DeviceID           string    `json:"deviceId"`
 	Name               string    `json:"name"`
-	CPUCores           int64     `json:"cpu_cores"`
-	MemoryMB           int64     `json:"memory_mb"`
-	DiskMB             int64     `json:"disk_mb"`
-	DeletionProtection bool      `json:"deletion_protection"`
-	RetainDisk         bool      `json:"retain_disk"`
-	IsDefault          bool      `json:"is_default"`
+	CPUCores           int64     `json:"cpuCores"`
+	MemoryMB           int64     `json:"memoryMb"`
+	DiskMB             int64     `json:"diskMb"`
+	DeletionProtection bool      `json:"deletionProtection"`
+	RetainDisk         bool      `json:"retainDisk"`
+	IsDefault          bool      `json:"isDefault"`
 	Management         string    `json:"management"`
 	State              string    `json:"state"`
 	Health             string    `json:"health"`
-	DesiredRevision    Version   `json:"desired_revision"`
-	ObservedRevision   Version   `json:"observed_revision"`
-	ResourceVersion    Version   `json:"resource_version"`
+	DesiredRevision    Version   `json:"desiredRevision"`
+	ObservedRevision   Version   `json:"observedRevision"`
+	ResourceVersion    Version   `json:"resourceVersion"`
 	Operation          Operation `json:"operation"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 type Placement struct {
-	VMMID        string `json:"vmm_id"`
-	ReplicaCount int64  `json:"replica_count"`
+	VMMID        string `json:"vmmId"`
+	ReplicaCount int64  `json:"replicaCount"`
 }
 
 type ApplicationSource struct {
 	Kind               string `json:"kind"`
-	MarketplaceAppID   string `json:"marketplace_application_id,omitempty"`
-	MarketplaceVersion string `json:"marketplace_version_id,omitempty"`
-	GitHubConnectionID string `json:"github_connection_id,omitempty"`
+	MarketplaceAppID   string `json:"marketplaceApplicationId,omitempty"`
+	MarketplaceVersion string `json:"marketplaceVersionId,omitempty"`
+	GitHubConnectionID string `json:"githubConnectionId,omitempty"`
 	Repository         string `json:"repository,omitempty"`
 	Ref                string `json:"ref,omitempty"`
 }
 
 type ApplicationInstance struct {
 	ID              string            `json:"id"`
-	ProjectID       string            `json:"project_id"`
+	ProjectID       string            `json:"projectId"`
 	Name            string            `json:"name"`
 	Description     string            `json:"description,omitempty"`
 	Source          ApplicationSource `json:"source"`
 	Placements      []Placement       `json:"placements"`
-	SecretIDs       []string          `json:"secret_ids,omitempty"`
+	SecretIDs       []string          `json:"secretIds,omitempty"`
 	State           string            `json:"state"`
-	ReadyReplicas   int64             `json:"ready_replicas"`
-	DesiredReplicas int64             `json:"desired_replicas"`
-	ResourceVersion Version           `json:"resource_version"`
+	ReadyReplicas   int64             `json:"readyReplicas"`
+	DesiredReplicas int64             `json:"desiredReplicas"`
+	ResourceVersion Version           `json:"resourceVersion"`
 	Operation       Operation         `json:"operation"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
 }
 
 type NamedItem struct {
@@ -157,5 +157,5 @@ type NamedItem struct {
 	Description  string `json:"description,omitempty"`
 	State        string `json:"state,omitempty"`
 	Metadata     any    `json:"metadata,omitempty"`
-	MetadataJSON string `json:"metadata_json,omitempty"`
+	MetadataJSON string `json:"metadataJson,omitempty"`
 }

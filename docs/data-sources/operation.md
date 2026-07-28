@@ -3,12 +3,12 @@
 page_title: "vappcloud_operation Data Source - VAppCloud"
 subcategory: ""
 description: |-
-  Reads a durable operation by opaque public ID.
+  Reads a durable operation by opaque public ID and routes compute, application, and VMM operation IDs to their owning API.
 ---
 
 # vappcloud_operation (Data Source)
 
-Reads a durable operation by opaque public ID.
+Reads a durable operation by opaque public ID and routes compute, application, and VMM operation IDs to their owning API.
 
 ## Example Usage
 

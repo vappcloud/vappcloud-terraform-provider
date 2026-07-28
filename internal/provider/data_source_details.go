@@ -336,7 +336,7 @@ func (d *operationDataSource) Metadata(_ context.Context, req datasource.Metadat
 
 func (d *operationDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Reads a durable operation by opaque public ID.",
+		MarkdownDescription: "Reads a durable operation by opaque public ID and routes compute, application, and VMM operation IDs to their owning API.",
 		Attributes: map[string]schema.Attribute{
 			"id":             schema.StringAttribute{Required: true},
 			"correlation_id": detailString("Correlation ID."),
@@ -358,8 +358,8 @@ func (d *operationDataSource) Read(ctx context.Context, req datasource.ReadReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var operation client.Operation
-	if err := d.client.Do(ctx, http.MethodGet, "/v1/operations/"+client.Escape(state.ID.ValueString()), nil, &operation, ""); err != nil {
+	operation, err := d.client.GetOperation(ctx, state.ID.ValueString())
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to read VAppCloud operation", err.Error())
 		return
 	}
