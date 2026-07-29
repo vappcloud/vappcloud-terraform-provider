@@ -27,6 +27,30 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var authorization struct {
+		Principal map[string]any   `json:"principal"`
+		Bindings  []map[string]any `json:"bindings"`
+	}
+	if err := api.Do(context.Background(), http.MethodGet, "/v1/iam/me", nil, &authorization, ""); err != nil {
+		t.Fatalf("resolve role-bound service-account authorization: %v", err)
+	}
+	if valueFromJSON(authorization.Principal, "principalType", "principal_type") != "service_account" {
+		t.Fatal("VAPPCLOUD_TOKEN must belong to a service account")
+	}
+	hasOrganizationEditor := false
+	for _, binding := range authorization.Bindings {
+		roleID := valueFromJSON(binding, "roleId", "role_id")
+		roleName := valueFromJSON(binding, "roleName", "role_name")
+		scopeType := valueFromJSON(binding, "scopeType", "scope_type")
+		if scopeType == "organization" &&
+			(roleName == "vapp-editor" || roleID == "00000000-0000-0000-0000-000000000102") {
+			hasOrganizationEditor = true
+			break
+		}
+	}
+	if !hasOrganizationEditor {
+		t.Fatal("VAPPCLOUD_TOKEN requires an organization-scoped vapp-editor binding")
+	}
 	name := fmt.Sprintf("tf-nightly-%d", time.Now().UTC().Unix())
 	config := fmt.Sprintf(`
 provider "vappcloud" {
@@ -62,4 +86,13 @@ resource "vappcloud_project" "nightly" {
 			{Config: config, PlanOnly: true},
 		},
 	})
+}
+
+func valueFromJSON(value map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if text, ok := value[key].(string); ok {
+			return text
+		}
+	}
+	return ""
 }

@@ -22,9 +22,11 @@ terraform {
 provider "vappcloud" {}
 ```
 
-Set `VAPPCLOUD_TOKEN` to an organization service token and optionally
-`VAPPCLOUD_API_URL` to override `https://api.4lock.net`. Service tokens are
-exchanged for short-lived API JWTs and are never written to Terraform state.
+Create a service account with an organization-scoped `vapp-editor` role, then
+set its named API key as `VAPPCLOUD_TOKEN`. Optionally set `VAPPCLOUD_API_URL`
+to override `https://api.4lock.net`. API keys are exchanged for short-lived API
+JWTs and are never written to Terraform state. The role binding, not the key,
+determines which projects and resources Terraform may manage.
 Transport behavior can be tuned with provider arguments for retries, request
 timeouts, rate limiting, proxies, custom CAs, TLS verification, and
 service-specific endpoint overrides.

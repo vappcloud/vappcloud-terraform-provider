@@ -105,12 +105,12 @@ func (p *vappcloudProvider) Metadata(_ context.Context, _ provider.MetadataReque
 
 func (p *vappcloudProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = providerschema.Schema{
-		MarkdownDescription: "Manage VAppCloud resources. Organization service tokens are exchanged for short-lived API JWTs and are never persisted in state.",
+		MarkdownDescription: "Manage VAppCloud resources. Named API keys for role-bound service accounts are exchanged for short-lived API JWTs and are never persisted in state.",
 		Attributes: map[string]providerschema.Attribute{
 			"token": providerschema.StringAttribute{
 				Optional:            true,
 				Sensitive:           true,
-				MarkdownDescription: "VAppCloud organization service token. Defaults to `VAPPCLOUD_TOKEN`.",
+				MarkdownDescription: "Named API key for a role-bound VAppCloud service account. Defaults to `VAPPCLOUD_TOKEN`.",
 			},
 			"api_url": providerschema.StringAttribute{
 				Optional:            true,
