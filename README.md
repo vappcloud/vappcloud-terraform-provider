@@ -27,6 +27,10 @@ set its named API key as `VAPPCLOUD_TOKEN`. Optionally set `VAPPCLOUD_API_URL`
 to override `https://api.4lock.net`. API keys are exchanged for short-lived API
 JWTs and are never written to Terraform state. The role binding, not the key,
 determines which projects and resources Terraform may manage.
+Service-account authorization is deliberately non-interactive: even a
+service account with an editor or administrator role cannot create VMM SSH or
+exec sessions. Register a human SSH key and use `vappctl vmm ssh` or
+`vappctl vmm exec` for audited operator access.
 Transport behavior can be tuned with provider arguments for retries, request
 timeouts, rate limiting, proxies, custom CAs, TLS verification, and
 service-specific endpoint overrides.

@@ -51,6 +51,17 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 	if !hasOrganizationEditor {
 		t.Fatal("VAPPCLOUD_TOKEN requires an organization-scoped vapp-editor binding")
 	}
+	var shell any
+	if err := api.Do(
+		context.Background(),
+		http.MethodPost,
+		"/v1/vmms/vmm-service-account-denial/sessions",
+		map[string]any{"purpose": "ssh", "keyId": "service-accounts-have-no-ssh-keys"},
+		&shell,
+		"",
+	); err == nil {
+		t.Fatal("service-account token unexpectedly opened a VMM shell session")
+	}
 	name := fmt.Sprintf("tf-nightly-%d", time.Now().UTC().Unix())
 	config := fmt.Sprintf(`
 provider "vappcloud" {
