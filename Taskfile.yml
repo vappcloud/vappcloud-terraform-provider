@@ -3,7 +3,7 @@ version: '3'
 tasks:
   fmt:
     cmds:
-      - test -z "$(gofmt -l .)"
+      - node scripts/verify-repository.mjs fmt
   test:
     cmds:
       - go test -race ./...
@@ -22,9 +22,7 @@ tasks:
       - go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 validate --provider-name vappcloud
   changelog:check:
     cmds:
-      - test -s CHANGELOG.md
-      - test -s LICENSE
-      - find .changelog -type f -name '*.md' ! -name README.md | grep -q .
+      - node scripts/verify-repository.mjs changelog
   lint:
     cmds:
       - go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run
@@ -43,20 +41,14 @@ tasks:
   verify:
     deps: [fmt, vet, test, build, docs:check, changelog:check]
   test:acceptance:terraform:
-    env:
-      TF_ACC: '1'
-      TF_ACC_PROVIDER_HOST: registry.terraform.io
-      TF_ACC_PROVIDER_NAMESPACE: vappcloud
-      TF_ACC_TERRAFORM_PATH:
-        sh: command -v terraform
     cmds:
-      - go test -v -timeout 30m ./internal/provider -run '^TestAcc'
+      - node scripts/run-acceptance.mjs terraform
   test:acceptance:tofu:
-    env:
-      TF_ACC: '1'
-      TF_ACC_PROVIDER_HOST: registry.opentofu.org
-      TF_ACC_PROVIDER_NAMESPACE: vappcloud
-      TF_ACC_TERRAFORM_PATH:
-        sh: command -v tofu
     cmds:
-      - go test -v -timeout 30m ./internal/provider -run '^TestAcc'
+      - node scripts/run-acceptance.mjs tofu
+  test:acceptance:live:terraform:
+    cmds:
+      - node scripts/run-acceptance.mjs terraform --live
+  test:acceptance:live:tofu:
+    cmds:
+      - node scripts/run-acceptance.mjs tofu --live
