@@ -30,7 +30,7 @@ jobs:
       - name: Resolve signing fingerprint
         run: |
           echo "GPG_FINGERPRINT=$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10; exit}')" >> "$GITHUB_ENV"
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: 'v2.17.1'
