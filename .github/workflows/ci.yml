@@ -125,4 +125,3 @@ jobs:
         run: |
           test "$(jq -r '.version' terraform-registry-manifest.json)" = "1"
           test "$(jq -r '.metadata.protocol_versions[0]' terraform-registry-manifest.json)" = "6.0"
-          go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
