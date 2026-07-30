@@ -1,0 +1,1 @@
+terraform import vappcloud_compute_instance.worker project_example/compute_example

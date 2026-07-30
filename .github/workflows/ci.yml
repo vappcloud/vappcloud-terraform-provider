@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - uses: arduino/setup-task@v2
+      - name: Formatting
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.12.2
+      - name: Generated documentation is current
+        run: |
+          task docs
+          git diff --exit-code -- docs
+          task docs:check
+      - name: Changelog and license
+        run: task changelog:check
+
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build ./...
+
+  acceptance:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: terraform
+            version: 1.15.8
+            host: registry.terraform.io
+          - engine: terraform
+            version: 1.12.2
+            host: registry.terraform.io
+          - engine: terraform
+            version: 1.11.4
+            host: registry.terraform.io
+          - engine: tofu
+            version: 1.12.5
+            host: registry.opentofu.org
+          - engine: tofu
+            version: 1.11.13
+            host: registry.opentofu.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        if: matrix.engine == 'terraform'
+        with:
+          terraform_version: ${{ matrix.version }}
+          terraform_wrapper: false
+      - uses: opentofu/setup-opentofu@v1
+        if: matrix.engine == 'tofu'
+        with:
+          tofu_version: ${{ matrix.version }}
+          tofu_wrapper: false
+      - name: Run acceptance suite
+        shell: bash
+        env:
+          TF_ACC: '1'
+          TF_ACC_PROVIDER_HOST: ${{ matrix.host }}
+          TF_ACC_PROVIDER_NAMESPACE: vappcloud
+        run: |
+          TF_ACC_TERRAFORM_PATH="$(command -v '${{ matrix.engine }}')" \
+            go test -v -timeout 30m ./internal/provider -run '^TestAcc'
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Assert forbidden secret fields are absent
+        run: |
+          ! grep -RInE 'enrollment_(token|data)|bootstrap_data|secret_value|cloud_credential' --include='*.go' internal
+
+  registry-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.17.1
+          args: release --snapshot --clean --skip=sign
+      - name: Validate Registry package manifest
+        shell: bash
+        run: |
+          test "$(jq -r '.version' terraform-registry-manifest.json)" = "1"
+          test "$(jq -r '.metadata.protocol_versions[0]' terraform-registry-manifest.json)" = "6.0"
+          go run github.com/goreleaser/goreleaser/v2@v2.17.1 check

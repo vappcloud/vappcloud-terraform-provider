@@ -1,0 +1,35 @@
+name: Bug report
+description: Report unexpected provider behavior.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: input
+    id: provider_version
+    attributes:
+      label: Provider version
+    validations:
+      required: true
+  - type: input
+    id: engine_version
+    attributes:
+      label: Terraform or OpenTofu version
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Minimal configuration and reproduction
+      description: Remove all tokens and secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+

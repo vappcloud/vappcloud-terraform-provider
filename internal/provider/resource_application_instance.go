@@ -1,0 +1,456 @@
+package provider
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-plugin-framework-timetypes/timetypes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+
+	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
+)
+
+type applicationInstanceResource struct{ resourceBase }
+
+type applicationInstanceResourceModel struct {
+	ID              types.String      `tfsdk:"id"`
+	ProjectID       types.String      `tfsdk:"project_id"`
+	Name            types.String      `tfsdk:"name"`
+	Description     types.String      `tfsdk:"description"`
+	Source          types.Object      `tfsdk:"source"`
+	Placements      types.List        `tfsdk:"placement"`
+	SecretIDs       types.Set         `tfsdk:"secret_ids"`
+	State           types.String      `tfsdk:"state"`
+	ReadyReplicas   types.Int64       `tfsdk:"ready_replicas"`
+	DesiredReplicas types.Int64       `tfsdk:"desired_replicas"`
+	OperationStatus types.String      `tfsdk:"operation_status"`
+	OperationID     types.String      `tfsdk:"operation_id"`
+	CorrelationID   types.String      `tfsdk:"correlation_id"`
+	ResourceVersion types.Int64       `tfsdk:"resource_version"`
+	CreatedAt       timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt       timetypes.RFC3339 `tfsdk:"updated_at"`
+	Timeouts        operationTimeouts `tfsdk:"timeouts"`
+}
+
+type sourceModel struct {
+	Kind                     types.String `tfsdk:"kind"`
+	MarketplaceApplicationID types.String `tfsdk:"marketplace_application_id"`
+	MarketplaceVersionID     types.String `tfsdk:"marketplace_version_id"`
+	GitHubConnectionID       types.String `tfsdk:"github_connection_id"`
+	Repository               types.String `tfsdk:"repository"`
+	Ref                      types.String `tfsdk:"ref"`
+}
+
+type placementModel struct {
+	VMMID        types.String `tfsdk:"vmm_id"`
+	ReplicaCount types.Int64  `tfsdk:"replica_count"`
+}
+
+var sourceAttributeTypes = map[string]attr.Type{
+	"kind":                       types.StringType,
+	"marketplace_application_id": types.StringType,
+	"marketplace_version_id":     types.StringType,
+	"github_connection_id":       types.StringType,
+	"repository":                 types.StringType,
+	"ref":                        types.StringType,
+}
+
+var placementAttributeTypes = map[string]attr.Type{
+	"vmm_id":        types.StringType,
+	"replica_count": types.Int64Type,
+}
+
+func NewApplicationInstanceResource() resource.Resource { return &applicationInstanceResource{} }
+
+func (r *applicationInstanceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_application_instance"
+}
+
+func (r *applicationInstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Version:             0,
+		MarkdownDescription: "A marketplace or GitHub application deployed explicitly to one or more VMMs.",
+		Attributes: withCommon(map[string]schema.Attribute{
+			"project_id":  immutableString("Owning project ID."),
+			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "Application instance name."},
+			"description": schema.StringAttribute{Optional: true, MarkdownDescription: "Mutable description."},
+			"source": schema.SingleNestedAttribute{
+				Required:            true,
+				MarkdownDescription: "Exactly one marketplace or GitHub source. Source changes replace the deployment.",
+				Attributes: map[string]schema.Attribute{
+					"kind": schema.StringAttribute{
+						Required:   true,
+						Validators: []validator.String{stringvalidator.OneOf("marketplace", "github")},
+					},
+					"marketplace_application_id": schema.StringAttribute{Optional: true},
+					"marketplace_version_id":     schema.StringAttribute{Optional: true},
+					"github_connection_id":       schema.StringAttribute{Optional: true},
+					"repository":                 schema.StringAttribute{Optional: true},
+					"ref":                        schema.StringAttribute{Optional: true},
+				},
+				PlanModifiers: []planmodifier.Object{objectplanmodifier.RequiresReplace()},
+			},
+			"placement": schema.ListNestedAttribute{
+				Required:   true,
+				Validators: []validator.List{listvalidator.SizeAtLeast(1)},
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"vmm_id": schema.StringAttribute{
+							Required:            true,
+							MarkdownDescription: "Target VMM ID. Changing placement identity replaces the deployment.",
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.RequiresReplace(),
+							},
+						},
+						"replica_count": schema.Int64Attribute{
+							Required:            true,
+							Validators:          []validator.Int64{int64validator.AtLeast(1)},
+							MarkdownDescription: "Replicas placed on this VMM.",
+						},
+					},
+				},
+			},
+			"secret_ids": schema.SetAttribute{
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "References to preconfigured secret IDs. Secret values are never accepted or stored.",
+			},
+			"state":            computedString("Deployment state."),
+			"ready_replicas":   schema.Int64Attribute{Computed: true},
+			"desired_replicas": schema.Int64Attribute{Computed: true},
+			"operation_status": computedString("Latest asynchronous operation state."),
+			"operation_id":     computedString("Latest asynchronous operation ID."),
+			"correlation_id":   computedString("Latest operation correlation ID."),
+			"timeouts":         timeoutAttributes(ctx, operationTimeout),
+		}),
+	}
+}
+
+func (r *applicationInstanceResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = identitySchema(true)
+}
+
+func (r *applicationInstanceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config applicationInstanceResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() || config.Source.IsNull() || config.Source.IsUnknown() {
+		return
+	}
+	var source sourceModel
+	resp.Diagnostics.Append(config.Source.As(ctx, &source, basetypes.ObjectAsOptions{})...)
+	if resp.Diagnostics.HasError() || source.Kind.IsUnknown() {
+		return
+	}
+	switch source.Kind.ValueString() {
+	case "marketplace":
+		if source.MarketplaceApplicationID.IsNull() || source.MarketplaceApplicationID.ValueString() == "" ||
+			source.MarketplaceVersionID.IsNull() || source.MarketplaceVersionID.ValueString() == "" {
+			resp.Diagnostics.AddAttributeError(path.Root("source"), "Incomplete marketplace source", "marketplace_application_id and marketplace_version_id are required when kind is marketplace.")
+		}
+		if nonempty(source.GitHubConnectionID) || nonempty(source.Repository) || nonempty(source.Ref) {
+			resp.Diagnostics.AddAttributeError(path.Root("source"), "Mixed source configuration", "GitHub fields cannot be set for a marketplace source.")
+		}
+	case "github":
+		if !nonempty(source.GitHubConnectionID) || !nonempty(source.Repository) || !nonempty(source.Ref) {
+			resp.Diagnostics.AddAttributeError(path.Root("source"), "Incomplete GitHub source", "github_connection_id, repository, and ref are required when kind is github.")
+		}
+		if nonempty(source.MarketplaceApplicationID) || nonempty(source.MarketplaceVersionID) {
+			resp.Diagnostics.AddAttributeError(path.Root("source"), "Mixed source configuration", "Marketplace fields cannot be set for a GitHub source.")
+		}
+	}
+}
+
+func nonempty(v types.String) bool {
+	return !v.IsNull() && !v.IsUnknown() && v.ValueString() != ""
+}
+
+func (r *applicationInstanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan applicationInstanceResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	timeout := createTimeout(ctx, plan.Timeouts, operationTimeout, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	source, placements, secretIDs := applicationPlanValues(ctx, plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	payload := map[string]any{
+		"project_id":  plan.ProjectID.ValueString(),
+		"name":        plan.Name.ValueString(),
+		"description": plan.Description.ValueString(),
+		"source":      source,
+		"placements":  placements,
+		"secret_ids":  secretIDs,
+	}
+	key := createMutationKey(&resp.Diagnostics, "vappcloud_application_instance.create")
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var result client.Mutation[client.ApplicationInstance]
+	err := r.client.Do(ctx, http.MethodPost, "/v1/application-instances", payload, &result, key)
+	if err != nil {
+		addMutationDiagnostic(&resp.Diagnostics, "create", err)
+		return
+	}
+	if !completeMutation(ctx, r.client, &result, timeout,
+		func(application client.ApplicationInstance) string { return application.ID },
+		func(id string) string { return "/v1/application-instances/" + client.Escape(id) },
+		&resp.Diagnostics,
+	) {
+		return
+	}
+	applicationToState(result.Resource, &plan, &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+}
+
+func (r *applicationInstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state applicationInstanceResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	var instance client.ApplicationInstance
+	if !readResource(ctx, r.client, "/v1/application-instances/"+client.Escape(state.ID.ValueString()), &instance, &resp.State, &resp.Diagnostics) {
+		return
+	}
+	applicationToState(instance, &state, &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+}
+
+func (r *applicationInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan applicationInstanceResourceModel
+	var state applicationInstanceResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	timeout := updateTimeout(ctx, plan.Timeouts, operationTimeout, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	_, placements, secretIDs := applicationPlanValues(ctx, plan, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var result client.Mutation[client.ApplicationInstance]
+	id := state.ID.ValueString()
+	mutate := func(version client.Version) error {
+		payload := map[string]any{
+			"name":             plan.Name.ValueString(),
+			"description":      plan.Description.ValueString(),
+			"placements":       placements,
+			"secret_ids":       secretIDs,
+			"resource_version": version,
+		}
+		key := mutationKey(&resp.Diagnostics, "vappcloud_application_instance.update", id, payload)
+		if resp.Diagnostics.HasError() {
+			return errors.New("unable to derive idempotency key")
+		}
+		return r.client.Do(ctx, http.MethodPatch, "/v1/application-instances/"+client.Escape(id), payload, &result, key)
+	}
+	err := mutateWithVersionRetry(client.Version(state.ResourceVersion.ValueInt64()), func() (client.Version, error) {
+		var current client.ApplicationInstance
+		err := r.client.Do(ctx, http.MethodGet, "/v1/application-instances/"+client.Escape(id), nil, &current, "")
+		return current.ResourceVersion, err
+	}, mutate)
+	if err != nil {
+		addMutationDiagnostic(&resp.Diagnostics, "update", err)
+		return
+	}
+	if !completeMutation(ctx, r.client, &result, timeout,
+		func(application client.ApplicationInstance) string { return application.ID },
+		func(id string) string { return "/v1/application-instances/" + client.Escape(id) },
+		&resp.Diagnostics,
+	) {
+		return
+	}
+	applicationToState(result.Resource, &plan, &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+}
+
+func (r *applicationInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state applicationInstanceResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	timeout := deleteTimeout(ctx, state.Timeouts, operationTimeout, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var result client.Mutation[client.ApplicationInstance]
+	id := state.ID.ValueString()
+	mutate := func(version client.Version) error {
+		payload := map[string]any{"resource_version": version}
+		key := mutationKey(&resp.Diagnostics, "vappcloud_application_instance.delete", id, payload)
+		if resp.Diagnostics.HasError() {
+			return errors.New("unable to derive idempotency key")
+		}
+		endpoint := "/v1/application-instances/" + client.Escape(id) +
+			"?resource_version=" + strconv.FormatInt(version.Int64(), 10)
+		return r.client.Do(ctx, http.MethodDelete, endpoint, nil, &result, key)
+	}
+	err := mutateWithVersionRetry(client.Version(state.ResourceVersion.ValueInt64()), func() (client.Version, error) {
+		var current client.ApplicationInstance
+		err := r.client.Do(ctx, http.MethodGet, "/v1/application-instances/"+client.Escape(id), nil, &current, "")
+		return current.ResourceVersion, err
+	}, mutate)
+	if client.IsNotFound(err) {
+		return
+	}
+	if err != nil {
+		addMutationDiagnostic(&resp.Diagnostics, "delete", err)
+		return
+	}
+	_, _ = waitMutation(ctx, r.client, result.Operation, result.OperationID, timeout, &resp.Diagnostics)
+}
+
+func (r *applicationInstanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if req.ID == "" {
+		importCompositeIdentity(ctx, req, resp)
+		return
+	}
+	parts := strings.Split(req.ID, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		resp.Diagnostics.AddError("Invalid application import identifier", "Expected <project_id>/<application_instance_id>.")
+		return
+	}
+	var application client.ApplicationInstance
+	if err := r.client.Do(ctx, http.MethodGet, "/v1/application-instances/"+client.Escape(parts[1]), nil, &application, ""); err != nil {
+		resp.Diagnostics.AddError("Unable to import application instance", err.Error())
+		return
+	}
+	if application.ProjectID != parts[0] {
+		resp.Diagnostics.AddError(
+			"Application project mismatch",
+			fmt.Sprintf("Application instance %s belongs to project %s, not %s.", parts[1], application.ProjectID, parts[0]),
+		)
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), parts[0])...)
+}
+
+func applicationPlanValues(ctx context.Context, plan applicationInstanceResourceModel, diagnostics interface {
+	Append(...diag.Diagnostic)
+}) (client.ApplicationSource, []client.Placement, []string) {
+	var sourceModelValue sourceModel
+	diagnostics.Append(plan.Source.As(ctx, &sourceModelValue, basetypes.ObjectAsOptions{})...)
+	source := client.ApplicationSource{
+		Kind:               sourceModelValue.Kind.ValueString(),
+		MarketplaceAppID:   sourceModelValue.MarketplaceApplicationID.ValueString(),
+		MarketplaceVersion: sourceModelValue.MarketplaceVersionID.ValueString(),
+		GitHubConnectionID: sourceModelValue.GitHubConnectionID.ValueString(),
+		Repository:         sourceModelValue.Repository.ValueString(),
+		Ref:                sourceModelValue.Ref.ValueString(),
+	}
+	var placementValues []placementModel
+	diagnostics.Append(plan.Placements.ElementsAs(ctx, &placementValues, false)...)
+	placements := make([]client.Placement, 0, len(placementValues))
+	for _, placement := range placementValues {
+		placements = append(placements, client.Placement{
+			VMMID: placement.VMMID.ValueString(), ReplicaCount: placement.ReplicaCount.ValueInt64(),
+		})
+	}
+	var secretValues []string
+	if !plan.SecretIDs.IsNull() && !plan.SecretIDs.IsUnknown() {
+		diagnostics.Append(plan.SecretIDs.ElementsAs(ctx, &secretValues, false)...)
+	}
+	return source, placements, secretValues
+}
+
+func applicationToState(instance client.ApplicationInstance, state *applicationInstanceResourceModel, diagnostics interface {
+	Append(...diag.Diagnostic)
+}) {
+	state.ID = types.StringValue(instance.ID)
+	state.ProjectID = types.StringValue(instance.ProjectID)
+	state.Name = types.StringValue(instance.Name)
+	if state.Description.IsNull() && instance.Description == "" {
+		state.Description = types.StringNull()
+	} else {
+		state.Description = types.StringValue(instance.Description)
+	}
+	source, diags := types.ObjectValue(sourceAttributeTypes, map[string]attr.Value{
+		"kind":                       types.StringValue(instance.Source.Kind),
+		"marketplace_application_id": stringOrNull(instance.Source.MarketplaceAppID),
+		"marketplace_version_id":     stringOrNull(instance.Source.MarketplaceVersion),
+		"github_connection_id":       stringOrNull(instance.Source.GitHubConnectionID),
+		"repository":                 stringOrNull(instance.Source.Repository),
+		"ref":                        stringOrNull(instance.Source.Ref),
+	})
+	diagnostics.Append(diags...)
+	state.Source = source
+	placementValues := make([]attr.Value, 0, len(instance.Placements))
+	for _, placement := range instance.Placements {
+		object, objectDiags := types.ObjectValue(placementAttributeTypes, map[string]attr.Value{
+			"vmm_id":        types.StringValue(placement.VMMID),
+			"replica_count": types.Int64Value(placement.ReplicaCount),
+		})
+		diagnostics.Append(objectDiags...)
+		placementValues = append(placementValues, object)
+	}
+	placements, placementDiags := types.ListValue(types.ObjectType{AttrTypes: placementAttributeTypes}, placementValues)
+	diagnostics.Append(placementDiags...)
+	state.Placements = placements
+	secretValues := make([]attr.Value, 0, len(instance.SecretIDs))
+	for _, id := range instance.SecretIDs {
+		secretValues = append(secretValues, types.StringValue(id))
+	}
+	if state.SecretIDs.IsNull() && len(secretValues) == 0 {
+		state.SecretIDs = types.SetNull(types.StringType)
+	} else {
+		secrets, secretDiags := types.SetValue(types.StringType, secretValues)
+		diagnostics.Append(secretDiags...)
+		state.SecretIDs = secrets
+	}
+	state.State = types.StringValue(instance.State)
+	state.ReadyReplicas = types.Int64Value(instance.ReadyReplicas)
+	state.DesiredReplicas = types.Int64Value(instance.DesiredReplicas)
+	state.ResourceVersion = types.Int64Value(instance.ResourceVersion.Int64())
+	state.OperationStatus = types.StringValue(instance.Operation.State)
+	state.OperationID = types.StringValue(instance.Operation.ID)
+	state.CorrelationID = types.StringValue(instance.Operation.CorrelationID)
+	state.CreatedAt = formatRFC3339(instance.CreatedAt)
+	state.UpdatedAt = formatRFC3339(instance.UpdatedAt)
+}
+
+func stringOrNull(value string) types.String {
+	if value == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(value)
+}
+
+var (
+	_ resource.Resource                   = &applicationInstanceResource{}
+	_ resource.ResourceWithConfigure      = &applicationInstanceResource{}
+	_ resource.ResourceWithIdentity       = &applicationInstanceResource{}
+	_ resource.ResourceWithImportState    = &applicationInstanceResource{}
+	_ resource.ResourceWithValidateConfig = &applicationInstanceResource{}
+)

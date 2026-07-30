@@ -1,0 +1,1 @@
+terraform import vappcloud_vmm.secondary project_example/vmm_example

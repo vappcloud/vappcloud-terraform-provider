@@ -1,0 +1,1 @@
+terraform import vappcloud_device.worker project_example/device_example

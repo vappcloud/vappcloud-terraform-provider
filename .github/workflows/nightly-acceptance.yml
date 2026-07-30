@@ -1,0 +1,55 @@
+name: Nightly real API acceptance
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-api:
+    if: github.repository_owner == 'vappcloud'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: terraform
+            version: 1.15.8
+          - engine: terraform
+            version: 1.12.2
+          - engine: terraform
+            version: 1.11.4
+          - engine: tofu
+            version: 1.12.5
+          - engine: tofu
+            version: 1.11.13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        if: matrix.engine == 'terraform'
+        with:
+          terraform_version: ${{ matrix.version }}
+          terraform_wrapper: false
+      - uses: opentofu/setup-opentofu@v1
+        if: matrix.engine == 'tofu'
+        with:
+          tofu_version: ${{ matrix.version }}
+          tofu_wrapper: false
+      - name: Real API project lifecycle (${{ matrix.engine }} ${{ matrix.version }})
+        env:
+          TF_ACC: "1"
+          TF_ACC_PROVIDER_HOST: ${{ matrix.engine == 'tofu' && 'registry.opentofu.org' || 'registry.terraform.io' }}
+          TF_ACC_PROVIDER_NAMESPACE: vappcloud
+          VAPPCLOUD_REAL_ACC: "1"
+          VAPPCLOUD_TOKEN: ${{ secrets.VAPPCLOUD_ACCEPTANCE_TOKEN }}
+          VAPPCLOUD_API_URL: ${{ secrets.VAPPCLOUD_ACCEPTANCE_API_URL }}
+        run: |
+          TF_ACC_TERRAFORM_PATH="$(command -v '${{ matrix.engine }}')" \
+            go test -v -timeout 20m ./internal/provider -run '^TestAccReal'

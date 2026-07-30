@@ -1,0 +1,60 @@
+version: '3'
+
+tasks:
+  fmt:
+    cmds:
+      - test -z "$(gofmt -l .)"
+  test:
+    cmds:
+      - go test -race ./...
+  vet:
+    cmds:
+      - go vet ./...
+  build:
+    cmds:
+      - go build ./...
+  docs:
+    cmds:
+      - go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 generate --provider-name vappcloud --rendered-provider-name VAppCloud
+      - go run ./tools/docs-subcategories
+  docs:check:
+    cmds:
+      - go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 validate --provider-name vappcloud
+  changelog:check:
+    cmds:
+      - test -s CHANGELOG.md
+      - test -s LICENSE
+      - find .changelog -type f -name '*.md' ! -name README.md | grep -q .
+  lint:
+    cmds:
+      - go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run
+  sweep:
+    desc: Delete explicitly named leaked verification resources (requires VAPPCLOUD_SWEEP_CONFIRM=1).
+    cmds:
+      - go run ./cmd/sweep
+  registry:dry-run:
+    cmds:
+      - go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
+      - go run github.com/goreleaser/goreleaser/v2@v2.17.1 release --snapshot --clean --skip=sign
+      - test "$(jq -r '.version' terraform-registry-manifest.json)" = "1"
+      - test "$(jq -r '.metadata.protocol_versions[0]' terraform-registry-manifest.json)" = "6.0"
+  verify:
+    deps: [fmt, vet, test, build, docs:check, changelog:check]
+  test:acceptance:terraform:
+    env:
+      TF_ACC: '1'
+      TF_ACC_PROVIDER_HOST: registry.terraform.io
+      TF_ACC_PROVIDER_NAMESPACE: vappcloud
+      TF_ACC_TERRAFORM_PATH:
+        sh: command -v terraform
+    cmds:
+      - go test -v -timeout 30m ./internal/provider -run '^TestAcc'
+  test:acceptance:tofu:
+    env:
+      TF_ACC: '1'
+      TF_ACC_PROVIDER_HOST: registry.opentofu.org
+      TF_ACC_PROVIDER_NAMESPACE: vappcloud
+      TF_ACC_TERRAFORM_PATH:
+        sh: command -v tofu
+    cmds:
+      - go test -v -timeout 30m ./internal/provider -run '^TestAcc'

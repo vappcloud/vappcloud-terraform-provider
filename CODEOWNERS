@@ -1,0 +1,6 @@
+* @vappcloud/platform
+/.github/ @vappcloud/platform
+/internal/client/ @vappcloud/platform
+/internal/provider/ @vappcloud/platform
+/scripts/ @vappcloud/platform
+
