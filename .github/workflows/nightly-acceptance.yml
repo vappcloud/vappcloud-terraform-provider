@@ -28,16 +28,16 @@ jobs:
             version: 1.11.13
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
           cache: true
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         if: matrix.engine == 'terraform'
         with:
           terraform_version: ${{ matrix.version }}
           terraform_wrapper: false
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@v2
         if: matrix.engine == 'tofu'
         with:
           tofu_version: ${{ matrix.version }}
