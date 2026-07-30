@@ -33,6 +33,8 @@ tasks:
     cmds:
       - go run ./cmd/sweep
   registry:dry-run:
+    env:
+      GOTOOLCHAIN: auto
     cmds:
       - go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
       - go run github.com/goreleaser/goreleaser/v2@v2.17.1 release --snapshot --clean --skip=sign

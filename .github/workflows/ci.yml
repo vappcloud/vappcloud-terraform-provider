@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
           cache: true
@@ -39,7 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
           cache: true
@@ -70,16 +70,16 @@ jobs:
             host: registry.opentofu.org
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
           cache: true
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         if: matrix.engine == 'terraform'
         with:
           terraform_version: ${{ matrix.version }}
           terraform_wrapper: false
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@v2
         if: matrix.engine == 'tofu'
         with:
           tofu_version: ${{ matrix.version }}
@@ -98,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
       - run: go vet ./...
@@ -111,12 +111,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25.x'
           cache: true
       - uses: anchore/sbom-action/download-syft@v0
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: v2.17.1
           args: release --snapshot --clean --skip=sign
@@ -125,4 +125,3 @@ jobs:
         run: |
           test "$(jq -r '.version' terraform-registry-manifest.json)" = "1"
           test "$(jq -r '.metadata.protocol_versions[0]' terraform-registry-manifest.json)" = "6.0"
-          go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
