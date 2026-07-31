@@ -20,6 +20,11 @@ and future project. A project-scoped role cannot create projects and can access
 only the selected projects. Revoking one named key leaves the service account's
 other keys active; disabling the service account denies every key.
 
+Service accounts are automation principals. Their roles may authorize VMM
+provisioning, but the VMM SSH, exec, and managed-tunnel APIs always require an
+active human principal. Terraform credentials therefore cannot be reused to
+open an interactive or remote-exec shell.
+
 VAppCloud resources accept references such as `secret_ids`, not secret values.
 Any future value-carrying secret input must use Terraform's write-only attribute
 support so it cannot enter plan or state. Short-lived credentials will be
