@@ -371,7 +371,59 @@ func decodeAPIError(res *http.Response) *APIError {
 		RequestID:  res.Header.Get("X-Request-ID"),
 		Retryable:  res.StatusCode == 429 || res.StatusCode == 502 || res.StatusCode == 503 || res.StatusCode == 504,
 	}
-	_ = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(e)
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	var wire struct {
+		Code           json.RawMessage `json:"code"`
+		Message        string          `json:"message"`
+		RequestID      string          `json:"requestId"`
+		RequestIDSnake string          `json:"request_id"`
+		Details        json.RawMessage `json:"details"`
+	}
+	if json.Unmarshal(body, &wire) == nil {
+		var textCode string
+		if json.Unmarshal(wire.Code, &textCode) == nil && textCode != "" {
+			e.Code = textCode
+		} else {
+			var numericCode int
+			if json.Unmarshal(wire.Code, &numericCode) == nil {
+				if name := grpcStatusName(numericCode); name != "" {
+					e.Code = name
+				}
+			}
+		}
+		if wire.Message != "" {
+			e.Message = wire.Message
+		}
+		if wire.RequestID != "" {
+			e.RequestID = wire.RequestID
+		} else if wire.RequestIDSnake != "" {
+			e.RequestID = wire.RequestIDSnake
+		}
+		var details map[string]string
+		if json.Unmarshal(wire.Details, &details) == nil {
+			e.Details = details
+		}
+	}
+	grpcStatus := res.Header.Get("Grpc-Status")
+	if grpcStatus == "" {
+		grpcStatus = res.Trailer.Get("Grpc-Status")
+	}
+	if numericCode, err := strconv.Atoi(grpcStatus); err == nil {
+		if name := grpcStatusName(numericCode); name != "" {
+			e.Code = name
+		}
+	}
+	grpcMessage := res.Header.Get("Grpc-Message")
+	if grpcMessage == "" {
+		grpcMessage = res.Trailer.Get("Grpc-Message")
+	}
+	if grpcMessage != "" {
+		if decoded, err := url.PathUnescape(grpcMessage); err == nil {
+			e.Message = decoded
+		} else {
+			e.Message = grpcMessage
+		}
+	}
 	e.Retryable = res.StatusCode == 429 || res.StatusCode == 502 || res.StatusCode == 503 || res.StatusCode == 504
 	if e.Code == "" {
 		e.Code = http.StatusText(res.StatusCode)
@@ -393,6 +445,28 @@ func decodeAPIError(res *http.Response) *APIError {
 		e.Retryable = true
 	}
 	return e
+}
+
+func grpcStatusName(code int) string {
+	return map[int]string{
+		0:  "OK",
+		1:  "CANCELLED",
+		2:  "UNKNOWN",
+		3:  "INVALID_ARGUMENT",
+		4:  "DEADLINE_EXCEEDED",
+		5:  "NOT_FOUND",
+		6:  "ALREADY_EXISTS",
+		7:  "PERMISSION_DENIED",
+		8:  "RESOURCE_EXHAUSTED",
+		9:  "FAILED_PRECONDITION",
+		10: "ABORTED",
+		11: "OUT_OF_RANGE",
+		12: "UNIMPLEMENTED",
+		13: "INTERNAL",
+		14: "UNAVAILABLE",
+		15: "DATA_LOSS",
+		16: "UNAUTHENTICATED",
+	}[code]
 }
 
 func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {

@@ -137,6 +137,32 @@ func TestServiceTokenExchangeAndRedaction(t *testing.T) {
 	}
 }
 
+func TestTranscodedGRPCErrorPreservesStatusAndMessage(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/grpc+proto")
+		w.Header().Set("Grpc-Status", "16")
+		w.Header().Set("Grpc-Message", "human%20authentication%20required")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL, "opaque-token", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Do(context.Background(), http.MethodGet, "/v1/vmms/vmm-1/sessions", nil, nil, "")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %v", err)
+	}
+	if apiErr.StatusCode != http.StatusUnauthorized ||
+		apiErr.Code != "UNAUTHENTICATED" ||
+		apiErr.Message != "human authentication required" {
+		t.Fatalf("unexpected decoded gRPC error: %+v", apiErr)
+	}
+}
+
 func TestOnlyExplicitServiceTokensAreExchanged(t *testing.T) {
 	t.Parallel()
 	var exchanges atomic.Int32

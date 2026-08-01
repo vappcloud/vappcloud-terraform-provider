@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -50,6 +51,54 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 	}
 	if !hasOrganizationEditor {
 		t.Fatal("VAPPCLOUD_TOKEN requires an organization-scoped vapp-editor binding")
+	}
+	vmmID := os.Getenv("VAPPCLOUD_REAL_ACC_VMM_ID")
+	if vmmID == "" {
+		t.Fatal("VAPPCLOUD_REAL_ACC_VMM_ID must identify an existing VMM for the service-account shell-denial check")
+	}
+	var existingVMM client.VMM
+	if err := api.Do(
+		context.Background(),
+		http.MethodGet,
+		"/v1/vmms/"+client.Escape(vmmID),
+		nil,
+		&existingVMM,
+		"",
+	); err != nil {
+		t.Fatalf("read VMM used by service-account shell-denial check: %v", err)
+	}
+	if existingVMM.ID != vmmID {
+		t.Fatalf("VMM denial fixture mismatch: requested %q, received %q", vmmID, existingVMM.ID)
+	}
+	idempotencyKey, err := client.NewIdempotencyKey("service-account-shell-denial")
+	if err != nil {
+		t.Fatalf("create shell-denial idempotency key: %v", err)
+	}
+	var shell any
+	err = api.Do(
+		context.Background(),
+		http.MethodPost,
+		"/v1/vmms/"+client.Escape(vmmID)+"/sessions",
+		map[string]any{"purpose": "ssh", "keyId": "service-accounts-have-no-ssh-keys"},
+		&shell,
+		idempotencyKey,
+	)
+	if err == nil {
+		t.Fatal("service-account token unexpectedly opened a VMM shell session")
+	}
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("service-account shell denial returned a non-API error: %v", err)
+	}
+	if apiErr.StatusCode != http.StatusUnauthorized ||
+		apiErr.Code != "UNAUTHENTICATED" ||
+		apiErr.Message != "human authentication required" {
+		t.Fatalf(
+			"unexpected service-account shell denial: status=%d code=%q message=%q",
+			apiErr.StatusCode,
+			apiErr.Code,
+			apiErr.Message,
+		)
 	}
 	name := fmt.Sprintf("tf-nightly-%d", time.Now().UTC().Unix())
 	config := fmt.Sprintf(`
