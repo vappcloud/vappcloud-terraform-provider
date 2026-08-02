@@ -28,6 +28,10 @@ type vappcloudProvider struct {
 
 type providerModel struct {
 	Token              types.String  `tfsdk:"token"`
+	AccessKeyID        types.String  `tfsdk:"access_key_id"`
+	SecretAccessKey    types.String  `tfsdk:"secret_access_key"`
+	RoleARN            types.String  `tfsdk:"role_arn"`
+	SessionName        types.String  `tfsdk:"session_name"`
 	APIURL             types.String  `tfsdk:"api_url"`
 	EndpointOverrides  types.Map     `tfsdk:"endpoint_overrides"`
 	MaxRetries         types.Int64   `tfsdk:"max_retries"`
@@ -55,14 +59,24 @@ func (operationalConfigValidator) ValidateProvider(ctx context.Context, req prov
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if !config.Token.IsUnknown() &&
-		strings.TrimSpace(config.Token.ValueString()) == "" &&
-		strings.TrimSpace(os.Getenv("VAPPCLOUD_TOKEN")) == "" {
+	if config.Token.IsUnknown() || config.AccessKeyID.IsUnknown() || config.SecretAccessKey.IsUnknown() {
+		return
+	}
+	token := firstNonEmpty(config.Token.ValueString(), os.Getenv("VAPPCLOUD_TOKEN"))
+	accessKeyID := firstNonEmpty(config.AccessKeyID.ValueString(), os.Getenv("VAPPCLOUD_ACCESS_KEY_ID"))
+	secretAccessKey := firstNonEmpty(config.SecretAccessKey.ValueString(), os.Getenv("VAPPCLOUD_SECRET_ACCESS_KEY"))
+	if token == "" && accessKeyID == "" && secretAccessKey == "" {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("token"),
-			"Missing VAppCloud token",
-			"Set the token provider attribute or the VAPPCLOUD_TOKEN environment variable.",
+			"Missing VAppCloud credentials",
+			"Set token/VAPPCLOUD_TOKEN or access_key_id and secret_access_key (or their VAPPCLOUD_* environment variables).",
 		)
+	}
+	if (accessKeyID == "") != (secretAccessKey == "") {
+		resp.Diagnostics.AddError("Incomplete VAppCloud access key", "Both access_key_id and secret_access_key must be configured together.")
+	}
+	if token != "" && accessKeyID != "" {
+		resp.Diagnostics.AddError("Ambiguous VAppCloud credentials", "Configure either token or access-key credentials, not both.")
 	}
 	if config.InsecureSkipVerify.ValueBool() && !config.CACertificate.IsNull() && config.CACertificate.ValueString() != "" {
 		resp.Diagnostics.AddError(
@@ -105,12 +119,29 @@ func (p *vappcloudProvider) Metadata(_ context.Context, _ provider.MetadataReque
 
 func (p *vappcloudProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = providerschema.Schema{
-		MarkdownDescription: "Manage VAppCloud resources. Named API keys for role-bound service accounts are exchanged for short-lived API JWTs and are never persisted in state.",
+		MarkdownDescription: "Manage VAppCloud resources with service-account access keys exchanged for short-lived STS sessions. Credentials are never persisted in state.",
 		Attributes: map[string]providerschema.Attribute{
 			"token": providerschema.StringAttribute{
 				Optional:            true,
 				Sensitive:           true,
-				MarkdownDescription: "Named API key for a role-bound VAppCloud service account. Defaults to `VAPPCLOUD_TOKEN`.",
+				MarkdownDescription: "Legacy bearer or service token. Defaults to `VAPPCLOUD_TOKEN`. Cannot be combined with access-key credentials.",
+			},
+			"access_key_id": providerschema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Service-account access key ID. Defaults to `VAPPCLOUD_ACCESS_KEY_ID` and is exchanged for an in-memory STS session.",
+			},
+			"secret_access_key": providerschema.StringAttribute{
+				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "Service-account secret access key. Defaults to `VAPPCLOUD_SECRET_ACCESS_KEY`; it is never persisted in managed resource state.",
+			},
+			"role_arn": providerschema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Optional IAM role ARN to assume when exchanging access-key credentials. Defaults to `VAPPCLOUD_ROLE_ARN`.",
+			},
+			"session_name": providerschema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "STS session name used for audit records. Defaults to `VAPPCLOUD_SESSION_NAME`, then `terraform-provider`.",
 			},
 			"api_url": providerschema.StringAttribute{
 				Optional:            true,
@@ -164,14 +195,17 @@ func (p *vappcloudProvider) Configure(ctx context.Context, req provider.Configur
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if config.Token.IsUnknown() || config.APIURL.IsUnknown() {
-		resp.Diagnostics.AddError("Unknown provider configuration", "Provider token and api_url must be known during configuration.")
+	if config.Token.IsUnknown() || config.AccessKeyID.IsUnknown() || config.SecretAccessKey.IsUnknown() ||
+		config.RoleARN.IsUnknown() || config.SessionName.IsUnknown() || config.APIURL.IsUnknown() {
+		resp.Diagnostics.AddError("Unknown provider configuration", "Provider credentials, role/session settings, and api_url must be known during configuration.")
 		return
 	}
 	token := config.Token.ValueString()
 	if token == "" {
 		token = os.Getenv("VAPPCLOUD_TOKEN")
 	}
+	accessKeyID := firstNonEmpty(config.AccessKeyID.ValueString(), os.Getenv("VAPPCLOUD_ACCESS_KEY_ID"))
+	secretAccessKey := firstNonEmpty(config.SecretAccessKey.ValueString(), os.Getenv("VAPPCLOUD_SECRET_ACCESS_KEY"))
 	apiURL := config.APIURL.ValueString()
 	if apiURL == "" {
 		apiURL = os.Getenv("VAPPCLOUD_API_URL")
@@ -201,6 +235,10 @@ func (p *vappcloudProvider) Configure(ctx context.Context, req provider.Configur
 	c, err := client.NewWithConfig(client.Config{
 		BaseURL:            apiURL,
 		Token:              token,
+		AccessKeyID:        accessKeyID,
+		SecretAccessKey:    secretAccessKey,
+		RoleARN:            firstNonEmpty(config.RoleARN.ValueString(), os.Getenv("VAPPCLOUD_ROLE_ARN")),
+		SessionName:        firstNonEmpty(config.SessionName.ValueString(), os.Getenv("VAPPCLOUD_SESSION_NAME")),
 		ProviderVersion:    p.version,
 		TerraformVersion:   req.TerraformVersion,
 		RequestTimeout:     requestTimeout,
@@ -218,6 +256,15 @@ func (p *vappcloudProvider) Configure(ctx context.Context, req provider.Configur
 	}
 	resp.ResourceData = c
 	resp.DataSourceData = c
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func configuredDuration(value types.String, fallback time.Duration, name string, diagnostics *diag.Diagnostics) (time.Duration, bool) {
@@ -247,6 +294,10 @@ func (p *vappcloudProvider) Resources(_ context.Context) []func() resource.Resou
 		NewComputeInstanceResource,
 		NewVMMResource,
 		NewApplicationInstanceResource,
+		NewIAMPolicyResource,
+		NewIAMPolicyVersionResource,
+		NewIAMPolicyAttachmentResource,
+		NewIAMGroupResource,
 	}
 }
 

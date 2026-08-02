@@ -159,3 +159,48 @@ type NamedItem struct {
 	Metadata     any    `json:"metadata,omitempty"`
 	MetadataJSON string `json:"metadataJson,omitempty"`
 }
+
+type IAMPolicy struct {
+	ID             string    `json:"id"`
+	OrganizationID int64     `json:"organizationId"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description,omitempty"`
+	Managed        bool      `json:"managed"`
+	ARN            string    `json:"arn"`
+	DefaultVersion string    `json:"defaultVersion"`
+	DocumentJSON   string    `json:"documentJson"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+type IAMPolicyVersion struct {
+	PolicyID     string    `json:"policyId"`
+	Version      string    `json:"version"`
+	DocumentJSON string    `json:"documentJson"`
+	IsDefault    bool      `json:"isDefault"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+type IAMPolicyAttachment struct {
+	PolicyID   string    `json:"policyId"`
+	PolicyARN  string    `json:"policyArn"`
+	PolicyName string    `json:"policyName"`
+	TargetType string    `json:"targetType"`
+	TargetID   string    `json:"targetId"`
+	CreatedBy  string    `json:"createdBy"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type IAMGroup struct {
+	ID             string    `json:"id"`
+	OrganizationID int64     `json:"organizationId"`
+	Name           string    `json:"name"`
+	ARN            string    `json:"arn"`
+	MemberCount    int64     `json:"memberCount"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+type IAMGroupMembers struct {
+	PrincipalIDs []string `json:"principalIds"`
+}

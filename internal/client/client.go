@@ -35,6 +35,10 @@ const (
 type Config struct {
 	BaseURL            string
 	Token              string
+	AccessKeyID        string
+	SecretAccessKey    string
+	RoleARN            string
+	SessionName        string
 	ProviderVersion    string
 	TerraformVersion   string
 	AppendUserAgent    string
@@ -52,6 +56,10 @@ type Client struct {
 	baseURL      *url.URL
 	endpoints    map[string]*url.URL
 	token        string
+	accessKeyID  string
+	secretKey    string
+	roleARN      string
+	sessionName  string
 	jwt          string
 	jwtExpiresAt time.Time
 	userAgent    string
@@ -68,6 +76,13 @@ type tokenResponse struct {
 	ExpiresIn   int64  `json:"expires_in"`
 }
 
+type stsCredentialResponse struct {
+	Credentials struct {
+		SessionToken string    `json:"SessionToken"`
+		Expiration   time.Time `json:"Expiration"`
+	} `json:"Credentials"`
+}
+
 func New(baseURL, token, version string) (*Client, error) {
 	return NewWithConfig(Config{
 		BaseURL: baseURL, Token: token, ProviderVersion: version, MaxRetries: defaultRetries,
@@ -75,8 +90,14 @@ func New(baseURL, token, version string) (*Client, error) {
 }
 
 func NewWithConfig(config Config) (*Client, error) {
-	if strings.TrimSpace(config.Token) == "" {
-		return nil, errors.New("VAppCloud token is required")
+	config.Token = strings.TrimSpace(config.Token)
+	config.AccessKeyID = strings.TrimSpace(config.AccessKeyID)
+	config.SecretAccessKey = strings.TrimSpace(config.SecretAccessKey)
+	if config.Token != "" && (config.AccessKeyID != "" || config.SecretAccessKey != "") {
+		return nil, errors.New("VAppCloud token and access-key credentials cannot be configured together")
+	}
+	if config.Token == "" && (config.AccessKeyID == "" || config.SecretAccessKey == "") {
+		return nil, errors.New("VAppCloud token or a complete access-key credential pair is required")
 	}
 	u, err := ValidateBaseURL(config.BaseURL)
 	if err != nil {
@@ -156,6 +177,10 @@ func NewWithConfig(config Config) (*Client, error) {
 		baseURL:      u,
 		endpoints:    endpoints,
 		token:        config.Token,
+		accessKeyID:  config.AccessKeyID,
+		secretKey:    config.SecretAccessKey,
+		roleARN:      strings.TrimSpace(config.RoleARN),
+		sessionName:  strings.TrimSpace(config.SessionName),
 		userAgent:    userAgent,
 		http:         &http.Client{Timeout: timeout, Transport: transport},
 		maxAttempts:  maxRetries + 1,
@@ -201,13 +226,16 @@ func (c *Client) SetHTTPClient(h *http.Client) {
 }
 
 func (c *Client) authToken(ctx context.Context) (string, error) {
-	if !strings.HasPrefix(c.token, "vappsvc_") {
+	if c.accessKeyID == "" && !strings.HasPrefix(c.token, "vappsvc_") {
 		return c.token, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.jwt != "" && time.Now().Add(30*time.Second).Before(c.jwtExpiresAt) {
 		return c.jwt, nil
+	}
+	if c.accessKeyID != "" {
+		return c.exchangeAccessKey(ctx)
 	}
 	body, _ := json.Marshal(map[string]string{"service_token": c.token})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL.String()+"/token", bytes.NewReader(body))
@@ -236,6 +264,63 @@ func (c *Client) authToken(ctx context.Context) (string, error) {
 	}
 	c.jwt = out.AccessToken
 	c.jwtExpiresAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
+	return c.jwt, nil
+}
+
+func (c *Client) exchangeAccessKey(ctx context.Context) (string, error) {
+	path := "/v1/sts/get-session-token"
+	operation := "session_token"
+	if c.roleARN != "" {
+		path = "/v1/sts/assume-role"
+		operation = "assume_role"
+	}
+	sessionName := c.sessionName
+	if sessionName == "" {
+		sessionName = "terraform-provider"
+	}
+	body, err := json.Marshal(map[string]any{
+		"access_key_id":     c.accessKeyID,
+		"secret_access_key": c.secretKey,
+		"duration_seconds":  3600,
+		"session_name":      sessionName,
+		"role_arn":          c.roleARN,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode VAppCloud STS %s request: %w", operation, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.requestURL(path), bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("exchange VAppCloud access key: %w", err)
+	}
+	if res.StatusCode/100 != 2 {
+		apiErr := decodeAPIError(res)
+		apiErr.Message = redact(apiErr.Message, c.secretKey)
+		for key, value := range apiErr.Details {
+			apiErr.Details[key] = redact(value, c.secretKey)
+		}
+		return "", apiErr
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out stsCredentialResponse
+	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode VAppCloud STS credentials: %w", err)
+	}
+	if out.Credentials.SessionToken == "" {
+		return "", errors.New("VAppCloud STS returned an empty session token")
+	}
+	expiresAt := out.Credentials.Expiration
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().Add(time.Hour)
+	}
+	c.jwt = out.Credentials.SessionToken
+	c.jwtExpiresAt = expiresAt
 	return c.jwt, nil
 }
 
@@ -315,7 +400,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 		}
 
 		apiErr := decodeAPIError(res)
-		if res.StatusCode == http.StatusUnauthorized && strings.HasPrefix(c.token, "vappsvc_") && !reauthenticated {
+		if res.StatusCode == http.StatusUnauthorized && (strings.HasPrefix(c.token, "vappsvc_") || c.accessKeyID != "") && !reauthenticated {
 			reauthenticated = true
 			c.mu.Lock()
 			c.jwt = ""
@@ -328,9 +413,9 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 			continue
 		}
 		if !apiErr.Retryable || attempt == c.maxAttempts-1 {
-			apiErr.Message = redact(apiErr.Message, c.token, token)
+			apiErr.Message = redact(apiErr.Message, c.token, c.secretKey, token)
 			for key, value := range apiErr.Details {
-				apiErr.Details[key] = redact(value, c.token, token)
+				apiErr.Details[key] = redact(value, c.token, c.secretKey, token)
 			}
 			return apiErr
 		}

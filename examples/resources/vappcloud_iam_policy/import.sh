@@ -1,0 +1,1 @@
+terraform import vappcloud_iam_policy.readonly_vmm policy-id

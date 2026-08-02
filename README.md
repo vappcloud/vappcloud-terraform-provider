@@ -22,11 +22,19 @@ terraform {
 provider "vappcloud" {}
 ```
 
-Create a service account with an organization-scoped `vapp-editor` role, then
-set its named API key as `VAPPCLOUD_TOKEN`. Optionally set `VAPPCLOUD_API_URL`
-to override `https://api.4lock.net`. API keys are exchanged for short-lived API
-JWTs and are never written to Terraform state. The role binding, not the key,
-determines which projects and resources Terraform may manage.
+Create a service account and access key, then set the one-time credentials as
+`VAPPCLOUD_ACCESS_KEY_ID` and `VAPPCLOUD_SECRET_ACCESS_KEY`. The provider
+exchanges them for a short-lived STS session token in memory; neither the access
+key secret nor the session token is written to Terraform state. Set
+`VAPPCLOUD_ROLE_ARN` to assume a role and optionally set
+`VAPPCLOUD_SESSION_NAME` for audit records. `VAPPCLOUD_TOKEN` remains available
+for legacy short-lived bearer tokens, but it cannot be combined with an access
+key pair. Optionally set `VAPPCLOUD_API_URL` to override
+`https://api.4lock.net`.
+
+IAM policy evaluation is deny-first. The effective permissions come from the
+service account's direct, group, role, and instance-profile attachments; an
+explicit deny always overrides an allow.
 Service-account authorization is deliberately non-interactive: even a
 service account with an editor or administrator role cannot create VMM SSH or
 exec sessions. Register a human SSH key and use `vappctl vmm ssh` or
