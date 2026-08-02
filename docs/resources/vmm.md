@@ -19,13 +19,14 @@ resource "vappcloud_device" "host" {
 }
 
 resource "vappcloud_vmm" "secondary" {
-  project_id          = vappcloud_project.example.id
-  device_id           = vappcloud_device.host.id
-  name                = "application-pool"
-  cpu_cores           = 4
-  memory_mb           = 8192
-  deletion_protection = true
-  retain_disk         = false
+  project_id           = vappcloud_project.example.id
+  device_id            = vappcloud_device.host.id
+  name                 = "application-pool"
+  cpu_cores            = 4
+  memory_mb            = 8192
+  instance_profile_arn = "arn:vapp:iam::123:instance-profile/application-pool"
+  deletion_protection  = true
+  retain_disk          = false
 }
 ```
 
@@ -43,6 +44,7 @@ resource "vappcloud_vmm" "secondary" {
 ### Optional
 
 - `deletion_protection` (Boolean) API-enforced deletion protection.
+- `instance_profile_arn` (String) IAM instance profile ARN attached to this VMM. The profile must contain a role and the caller must have iam:PassRole.
 - `retain_disk` (Boolean) Delete policy persisted by the API. When true, the root disk is preserved as auditable retained storage on a future destroy; changing it does not alter a running VMM.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
@@ -54,6 +56,7 @@ resource "vappcloud_vmm" "secondary" {
 - `disk_mb` (Number) Root disk capacity in MiB.
 - `health` (String) Agent-reported health.
 - `id` (String) Opaque public resource identifier.
+- `instance_role_arn` (String) Role ARN supplied to the VMM by the attached instance profile.
 - `is_default` (Boolean) Always false for managed resources.
 - `management` (String) Management owner: terraform, console, external, or system.
 - `observed_revision` (Number) Latest agent-observed revision.

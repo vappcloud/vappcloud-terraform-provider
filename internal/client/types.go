@@ -115,6 +115,10 @@ type VMM struct {
 	DesiredRevision    Version   `json:"desiredRevision"`
 	ObservedRevision   Version   `json:"observedRevision"`
 	ResourceVersion    Version   `json:"resourceVersion"`
+	InstanceProfileID  string    `json:"instanceProfileId,omitempty"`
+	InstanceProfileARN string    `json:"instanceProfileArn,omitempty"`
+	InstanceRoleID     string    `json:"instanceRoleId,omitempty"`
+	InstanceRoleARN    string    `json:"instanceRoleArn,omitempty"`
 	Operation          Operation `json:"operation"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`

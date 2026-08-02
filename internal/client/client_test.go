@@ -35,12 +35,15 @@ func TestProtobufJSONInt64Scalars(t *testing.T) {
 	t.Parallel()
 	var vmm VMM
 	fixture := `{"id":"vmm-1","projectId":"prj-1","deviceId":"dev-1","cpuCores":4,"memoryMb":2048,"diskMb":10240,` +
-		`"desiredRevision":"3","observedRevision":"2","resourceVersion":"7"}`
+		`"desiredRevision":"3","observedRevision":"2","resourceVersion":"7",` +
+		`"instanceProfileArn":"arn:vapp:iam::3:instance-profile/qa","instanceRoleArn":"arn:vapp:iam::3:role/qa"}`
 	if err := json.Unmarshal([]byte(fixture), &vmm); err != nil {
 		t.Fatal(err)
 	}
 	if vmm.ResourceVersion != 7 || vmm.DesiredRevision != 3 || vmm.CPUCores != 4 ||
-		vmm.ProjectID != "prj-1" || vmm.DeviceID != "dev-1" {
+		vmm.ProjectID != "prj-1" || vmm.DeviceID != "dev-1" ||
+		vmm.InstanceProfileARN != "arn:vapp:iam::3:instance-profile/qa" ||
+		vmm.InstanceRoleARN != "arn:vapp:iam::3:role/qa" {
 		t.Fatalf("unexpected decoded VMM: %+v", vmm)
 	}
 	payload, err := json.Marshal(map[string]any{

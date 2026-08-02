@@ -22,6 +22,7 @@ provider "vappcloud" {
   token   = "header.payload.signature"
   api_url = %q
 }
+
 resource "vappcloud_vmm" "test" {
   project_id          = "prj-test"
   device_id           = "dev-test"
@@ -89,6 +90,53 @@ resource "vappcloud_vmm" "test" {
 				ImportStateId:      "prj-test/vmm-default",
 				ImportStatePersist: false,
 				ExpectError:        regexp.MustCompile("Default VMM cannot be imported"),
+			},
+		},
+	})
+}
+
+func TestAccVMMInstanceProfileAttachment(t *testing.T) {
+	server, api := newAcceptanceServer(t)
+	defer server.Close()
+	config := func(profileARN string) string {
+		profile := ""
+		if profileARN != "" {
+			profile = fmt.Sprintf("  instance_profile_arn = %q\n", profileARN)
+		}
+		return fmt.Sprintf(`
+provider "vappcloud" {
+  token   = "header.payload.signature"
+  api_url = %q
+}
+resource "vappcloud_vmm" "profile" {
+  project_id  = "prj-test"
+  device_id   = "dev-test"
+  name        = "profile-test"
+  cpu_cores   = 2
+  memory_mb   = 2048
+%s}`, server.URL, profile)
+	}
+	profileARN := "arn:vapp:iam::3:instance-profile/qa-profile"
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: providerFactories(),
+		CheckDestroy:             checkAcceptanceDestroy(api),
+		Steps: []resource.TestStep{
+			{
+				Config: config(profileARN),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("vappcloud_vmm.profile", "instance_profile_arn", profileARN),
+					resource.TestCheckResourceAttr("vappcloud_vmm.profile", "instance_role_arn", "arn:vapp:iam::3:role/qa-role"),
+				),
+			},
+			{
+				Config: config(""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("vappcloud_vmm.profile", "instance_profile_arn"),
+					resource.TestCheckNoResourceAttr("vappcloud_vmm.profile", "instance_role_arn"),
+				),
 			},
 		},
 	})
