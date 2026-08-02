@@ -29,28 +29,33 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var authorization struct {
-		Principal map[string]any   `json:"principal"`
-		Bindings  []map[string]any `json:"bindings"`
+		Principal map[string]any `json:"principal"`
 	}
 	if err := api.Do(context.Background(), http.MethodGet, "/v1/iam/me", nil, &authorization, ""); err != nil {
-		t.Fatalf("resolve role-bound service-account authorization: %v", err)
+		t.Fatalf("resolve service-account principal: %v", err)
 	}
 	if valueFromJSON(authorization.Principal, "principalType", "principal_type") != "service_account" {
 		t.Fatal("VAPPCLOUD_TOKEN must belong to a service account")
 	}
-	hasOrganizationEditor := false
-	for _, binding := range authorization.Bindings {
-		roleID := valueFromJSON(binding, "roleId", "role_id")
-		roleName := valueFromJSON(binding, "roleName", "role_name")
-		scopeType := valueFromJSON(binding, "scopeType", "scope_type")
-		if scopeType == "organization" &&
-			(roleName == "vapp-editor" || roleID == "00000000-0000-0000-0000-000000000102") {
-			hasOrganizationEditor = true
-			break
-		}
+	principalID := valueFromJSON(authorization.Principal, "id")
+	organizationID := valueFromJSON(authorization.Principal, "organizationId", "organization_id")
+	var simulation struct {
+		Decisions []struct {
+			Allowed bool `json:"allowed"`
+		} `json:"decisions"`
 	}
-	if !hasOrganizationEditor {
-		t.Fatal("VAPPCLOUD_TOKEN requires an organization-scoped vapp-editor binding")
+	if err := api.Do(context.Background(), http.MethodPost, "/v1/iam/simulate", map[string]any{
+		"principal_id": principalID,
+		"entries": []map[string]any{{
+			"action":       "project:Create",
+			"resource_arn": fmt.Sprintf("arn:vapp:project::%s:project/new", organizationID),
+			"context_json": "{}",
+		}},
+	}, &simulation, ""); err != nil {
+		t.Fatalf("evaluate service-account project policy: %v", err)
+	}
+	if len(simulation.Decisions) != 1 || !simulation.Decisions[0].Allowed {
+		t.Fatal("VAPPCLOUD_TOKEN must allow project:Create through IAM policy evaluation")
 	}
 	vmmID := os.Getenv("VAPPCLOUD_REAL_ACC_VMM_ID")
 	if vmmID == "" {
@@ -139,8 +144,11 @@ resource "vappcloud_project" "nightly" {
 
 func valueFromJSON(value map[string]any, keys ...string) string {
 	for _, key := range keys {
-		if text, ok := value[key].(string); ok {
-			return text
+		if raw, ok := value[key]; ok && raw != nil {
+			if text, ok := raw.(string); ok {
+				return text
+			}
+			return fmt.Sprint(raw)
 		}
 	}
 	return ""
