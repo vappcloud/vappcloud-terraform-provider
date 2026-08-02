@@ -1,0 +1,1 @@
+terraform import vappcloud_iam_policy_version.candidate policy-id/v2

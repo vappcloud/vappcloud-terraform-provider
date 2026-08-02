@@ -137,6 +137,112 @@ func TestServiceTokenExchangeAndRedaction(t *testing.T) {
 	}
 }
 
+func TestAccessKeySTSExchangeCachesAndRedacts(t *testing.T) {
+	t.Parallel()
+	const secret = "fixture-secret-access-key"
+	var exchanges atomic.Int32
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sts/get-session-token":
+			exchanges.Add(1)
+			if r.Header.Get("Authorization") != "" {
+				t.Error("STS exchange sent an authorization header")
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["access_key_id"] != "VAPPAKFIXTURE" || body["secret_access_key"] != secret ||
+				body["session_name"] != "terraform-ci" {
+				t.Errorf("unexpected STS request: %#v", body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Credentials": map[string]any{
+					"SessionToken": "sts.header.signature",
+					"Expiration":   time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
+				},
+			})
+		case "/v1/projects":
+			requests.Add(1)
+			if got := r.Header.Get("Authorization"); got != "Bearer sts.header.signature" {
+				t.Errorf("unexpected authorization header %q", got)
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(APIError{Code: "INVALID_ARGUMENT", Message: "reflected " + secret})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	c, err := NewWithConfig(Config{
+		BaseURL: server.URL, AccessKeyID: "VAPPAKFIXTURE", SecretAccessKey: secret,
+		SessionName: "terraform-ci", ProviderVersion: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		err = c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
+		if err == nil {
+			t.Fatal("expected API error")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("secret access key leaked in diagnostic: %s", err)
+		}
+	}
+	if exchanges.Load() != 1 || requests.Load() != 2 {
+		t.Fatalf("expected one cached exchange and two requests, got exchanges=%d requests=%d", exchanges.Load(), requests.Load())
+	}
+}
+
+func TestAccessKeyAssumeRoleExchange(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sts/assume-role" {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["role_arn"] != "arn:vapp:iam::42:role/deploy" {
+			t.Errorf("unexpected role ARN: %#v", body["role_arn"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Credentials": map[string]any{
+				"SessionToken": "assumed.header.signature",
+				"Expiration":   time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
+			},
+		})
+	}))
+	defer server.Close()
+
+	c, err := NewWithConfig(Config{
+		BaseURL: server.URL, AccessKeyID: "VAPPAKFIXTURE", SecretAccessKey: "secret",
+		RoleARN: "arn:vapp:iam::42:role/deploy", ProviderVersion: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, err := c.authToken(context.Background()); err != nil || token != "assumed.header.signature" {
+		t.Fatalf("unexpected assumed-role token=%q err=%v", token, err)
+	}
+}
+
+func TestCredentialConfigurationRejectsPartialOrAmbiguousValues(t *testing.T) {
+	t.Parallel()
+	for name, config := range map[string]Config{
+		"missing":   {BaseURL: "https://example.test"},
+		"partial":   {BaseURL: "https://example.test", AccessKeyID: "VAPPAKFIXTURE"},
+		"ambiguous": {BaseURL: "https://example.test", Token: "token", AccessKeyID: "id", SecretAccessKey: "secret"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewWithConfig(config); err == nil {
+				t.Fatal("expected credential validation error")
+			}
+		})
+	}
+}
+
 func TestTranscodedGRPCErrorPreservesStatusAndMessage(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

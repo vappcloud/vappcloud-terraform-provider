@@ -1,0 +1,1 @@
+terraform import vappcloud_iam_policy_attachment.operators_readonly_vmm policy-id/group/group-id

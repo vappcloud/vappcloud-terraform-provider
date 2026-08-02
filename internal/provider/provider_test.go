@@ -30,6 +30,10 @@ func TestProviderContract(t *testing.T) {
 	if !ok || !token.IsSensitive() {
 		t.Fatal("provider token must be present and sensitive")
 	}
+	secret, ok := schemaResponse.Schema.Attributes["secret_access_key"]
+	if !ok || !secret.IsSensitive() {
+		t.Fatal("provider secret_access_key must be present and sensitive")
+	}
 	resources := p.Resources(context.Background())
 	got := map[string]bool{}
 	for _, constructor := range resources {
@@ -58,7 +62,8 @@ func TestProviderContract(t *testing.T) {
 	}
 	for _, name := range []string{
 		"vappcloud_project", "vappcloud_device", "vappcloud_compute_instance",
-		"vappcloud_vmm", "vappcloud_application_instance",
+		"vappcloud_vmm", "vappcloud_application_instance", "vappcloud_iam_policy",
+		"vappcloud_iam_policy_version", "vappcloud_iam_policy_attachment", "vappcloud_iam_group",
 	} {
 		if !got[name] {
 			t.Errorf("missing resource %s", name)
