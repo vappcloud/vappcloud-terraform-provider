@@ -38,6 +38,8 @@ type vmmResourceModel struct {
 	DiskMB             types.Int64       `tfsdk:"disk_mb"`
 	DesiredRevision    types.Int64       `tfsdk:"desired_revision"`
 	ObservedRevision   types.Int64       `tfsdk:"observed_revision"`
+	InstanceProfileARN types.String      `tfsdk:"instance_profile_arn"`
+	InstanceRoleARN    types.String      `tfsdk:"instance_role_arn"`
 	OperationStatus    types.String      `tfsdk:"operation_status"`
 	OperationID        types.String      `tfsdk:"operation_id"`
 	CorrelationID      types.String      `tfsdk:"correlation_id"`
@@ -84,10 +86,17 @@ func (r *vmmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 			"disk_mb":           schema.Int64Attribute{Computed: true, MarkdownDescription: "Root disk capacity in MiB."},
 			"desired_revision":  schema.Int64Attribute{Computed: true, MarkdownDescription: "Desired VMM specification revision."},
 			"observed_revision": schema.Int64Attribute{Computed: true, MarkdownDescription: "Latest agent-observed revision."},
-			"operation_status":  computedString("Latest asynchronous operation state."),
-			"operation_id":      computedString("Latest asynchronous operation ID."),
-			"correlation_id":    computedString("Latest operation correlation ID."),
-			"timeouts":          timeoutAttributes(ctx, operationTimeout),
+			"instance_profile_arn": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "IAM instance profile ARN attached to this VMM. The profile must contain a role and the caller must have iam:PassRole.",
+			},
+			"instance_role_arn": schema.StringAttribute{
+				Computed: true, MarkdownDescription: "Role ARN supplied to the VMM by the attached instance profile.",
+			},
+			"operation_status": computedString("Latest asynchronous operation state."),
+			"operation_id":     computedString("Latest asynchronous operation ID."),
+			"correlation_id":   computedString("Latest operation correlation ID."),
+			"timeouts":         timeoutAttributes(ctx, operationTimeout),
 		}),
 	}
 }
@@ -102,6 +111,7 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	desiredProfileARN := plan.InstanceProfileARN.ValueString()
 	timeout := createTimeout(ctx, plan.Timeouts, operationTimeout, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
@@ -140,6 +150,18 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	if desiredProfileARN == "" || resp.Diagnostics.HasError() {
+		return
+	}
+	updated, err := reconcileVMMInstanceProfile(
+		ctx, r.client, result.Resource, "", desiredProfileARN,
+	)
+	if err != nil {
+		addMutationDiagnostic(&resp.Diagnostics, "attach VMM instance profile", err)
+		return
+	}
+	vmmToState(updated, &plan)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -170,6 +192,8 @@ func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	desiredProfileARN := plan.InstanceProfileARN.ValueString()
+	currentProfileARN := state.InstanceProfileARN.ValueString()
 	timeout := updateTimeout(ctx, plan.Timeouts, operationTimeout, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
@@ -206,6 +230,16 @@ func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		&resp.Diagnostics,
 	) {
 		return
+	}
+	if desiredProfileARN != currentProfileARN {
+		updated, profileErr := reconcileVMMInstanceProfile(
+			ctx, r.client, result.Resource, currentProfileARN, desiredProfileARN,
+		)
+		if profileErr != nil {
+			addMutationDiagnostic(&resp.Diagnostics, "update VMM instance profile", profileErr)
+			return
+		}
+		result.Resource = updated
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -297,12 +331,67 @@ func vmmToState(vmm client.VMM, state *vmmResourceModel) {
 	state.Health = types.StringValue(vmm.Health)
 	state.DesiredRevision = types.Int64Value(vmm.DesiredRevision.Int64())
 	state.ObservedRevision = types.Int64Value(vmm.ObservedRevision.Int64())
+	state.InstanceProfileARN = stringOrNull(vmm.InstanceProfileARN)
+	state.InstanceRoleARN = stringOrNull(vmm.InstanceRoleARN)
 	state.ResourceVersion = types.Int64Value(vmm.ResourceVersion.Int64())
 	state.OperationStatus = types.StringValue(vmm.Operation.State)
 	state.OperationID = types.StringValue(vmm.Operation.ID)
 	state.CorrelationID = types.StringValue(vmm.Operation.CorrelationID)
 	state.CreatedAt = formatRFC3339(vmm.CreatedAt)
 	state.UpdatedAt = formatRFC3339(vmm.UpdatedAt)
+}
+
+func reconcileVMMInstanceProfile(
+	ctx context.Context,
+	api *client.Client,
+	vmm client.VMM,
+	currentARN string,
+	desiredARN string,
+) (client.VMM, error) {
+	endpoint := "/v1/vmms/" + client.Escape(vmm.ID) + "/instance-profile"
+	mutate := func(method string, profileARN string, initialVersion client.Version) (client.VMM, error) {
+		var updated client.VMM
+		apply := func(version client.Version) error {
+			payload := map[string]any{"vmm_id": vmm.ID, "resource_version": version}
+			requestEndpoint := endpoint
+			var requestBody any = payload
+			if method == http.MethodPut {
+				payload["instance_profile_arn"] = profileARN
+			} else {
+				requestEndpoint += "?resource_version=" + strconv.FormatInt(version.Int64(), 10)
+				requestBody = nil
+			}
+			key, err := client.StableIdempotencyKey(
+				"vappcloud_vmm.instance_profile."+strings.ToLower(method), vmm.ID, payload,
+			)
+			if err != nil {
+				return err
+			}
+			return api.Do(ctx, method, requestEndpoint, requestBody, &updated, key)
+		}
+		err := mutateWithVersionRetry(initialVersion, func() (client.Version, error) {
+			var latest client.VMM
+			err := api.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(vmm.ID), nil, &latest, "")
+			return latest.ResourceVersion, err
+		}, apply)
+		return updated, err
+	}
+
+	current := vmm
+	var err error
+	if currentARN != "" {
+		current, err = mutate(http.MethodDelete, "", current.ResourceVersion)
+		if err != nil {
+			return vmm, err
+		}
+	}
+	if desiredARN != "" {
+		current, err = mutate(http.MethodPut, desiredARN, current.ResourceVersion)
+		if err != nil {
+			return current, err
+		}
+	}
+	return current, nil
 }
 
 var (

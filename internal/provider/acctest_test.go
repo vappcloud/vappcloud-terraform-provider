@@ -289,6 +289,42 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			op := succeededOperation(api, "vmm.create", api.vmm.ID)
 			api.vmm.Operation = op
 			_ = json.NewEncoder(w).Encode(client.Mutation[client.VMM]{Resource: api.vmm, Operation: op})
+		case strings.HasPrefix(r.URL.Path, "/v1/vmms/") && strings.HasSuffix(r.URL.Path, "/instance-profile"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/vmms/"), "/instance-profile")
+			if api.vmm.ID == "" || id != api.vmm.ID {
+				http.Error(w, `{"code":"NOT_FOUND","message":"VMM not found"}`, http.StatusNotFound)
+				return
+			}
+			if !requireIdempotency(w, r) {
+				return
+			}
+			switch r.Method {
+			case http.MethodPut:
+				var in map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&in)
+				if !requestVersion(w, in, api.vmm.ResourceVersion) {
+					return
+				}
+				api.vmm.InstanceProfileID = "profile-test"
+				api.vmm.InstanceProfileARN = fmt.Sprint(in["instance_profile_arn"])
+				api.vmm.InstanceRoleID = "role-test"
+				api.vmm.InstanceRoleARN = "arn:vapp:iam::3:role/qa-role"
+				api.vmm.ResourceVersion++
+				api.vmm.UpdatedAt = api.now()
+				_ = json.NewEncoder(w).Encode(api.vmm)
+			case http.MethodDelete:
+				if r.URL.Query().Get("resource_version") != strconv.FormatInt(api.vmm.ResourceVersion.Int64(), 10) {
+					http.Error(w, `{"code":"ABORTED","message":"resource version conflict"}`, http.StatusConflict)
+					return
+				}
+				api.vmm.InstanceProfileID = ""
+				api.vmm.InstanceProfileARN = ""
+				api.vmm.InstanceRoleID = ""
+				api.vmm.InstanceRoleARN = ""
+				api.vmm.ResourceVersion++
+				api.vmm.UpdatedAt = api.now()
+				_ = json.NewEncoder(w).Encode(api.vmm)
+			}
 		case strings.HasPrefix(r.URL.Path, "/v1/vmms/"):
 			id := strings.TrimPrefix(r.URL.Path, "/v1/vmms/")
 			if id == "vmm-default" && r.Method == http.MethodGet {

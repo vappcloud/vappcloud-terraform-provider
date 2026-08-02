@@ -1,0 +1,1 @@
+- Added `instance_profile_arn` management to `vappcloud_vmm`, including optimistic-version attach, detach, replacement, import, and drift reconciliation.
