@@ -51,4 +51,18 @@ configurations.
 Run `task verify`, then both acceptance suites. `task registry:dry-run` builds
 the exact snapshot package used by the Registry release workflow. See
 `CONTRIBUTING.md` for the complete gate.
-Terraform and OpenTofu provider for VAppCloud
+
+Credentialed development acceptance is opt-in and only manages the explicitly
+configured QA project and device:
+
+```text
+VAPPCLOUD_API_URL
+VAPPCLOUD_TOKEN
+VAPPCLOUD_REAL_PROJECT_ID
+VAPPCLOUD_REAL_DEVICE_ID
+```
+
+Run `task test:acceptance:live:terraform` or
+`task test:acceptance:live:tofu`. The live VMM case creates a uniquely named
+secondary VMM, repairs controlled drift, verifies import, and deletes only the
+resource recorded by the test.

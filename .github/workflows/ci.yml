@@ -17,7 +17,6 @@ jobs:
         with:
           go-version: '1.25.x'
           cache: true
-      - uses: arduino/setup-task@v2
       - name: Formatting
         shell: bash
         run: test -z "$(gofmt -l .)"
@@ -26,11 +25,12 @@ jobs:
           version: v2.12.2
       - name: Generated documentation is current
         run: |
-          task docs
+          go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 generate --provider-name vappcloud --rendered-provider-name VAppCloud
+          go run ./tools/docs-subcategories
           git diff --exit-code -- docs
-          task docs:check
+          go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@v0.25.0 validate --provider-name vappcloud
       - name: Changelog and license
-        run: task changelog:check
+        run: node scripts/verify-repository.mjs changelog
 
   verify:
     strategy:

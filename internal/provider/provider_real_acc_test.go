@@ -142,6 +142,137 @@ resource "vappcloud_project" "nightly" {
 	})
 }
 
+func TestAccRealAPIVMMLifecycle(t *testing.T) {
+	if os.Getenv("VAPPCLOUD_REAL_ACC") != "1" {
+		t.Skip("set VAPPCLOUD_REAL_ACC=1 to run credentialed real API acceptance")
+	}
+	apiURL := os.Getenv("VAPPCLOUD_API_URL")
+	token := os.Getenv("VAPPCLOUD_TOKEN")
+	projectID := os.Getenv("VAPPCLOUD_REAL_PROJECT_ID")
+	deviceID := os.Getenv("VAPPCLOUD_REAL_DEVICE_ID")
+	if apiURL == "" || token == "" || projectID == "" || deviceID == "" {
+		t.Fatal("VAPPCLOUD_API_URL, VAPPCLOUD_TOKEN, VAPPCLOUD_REAL_PROJECT_ID, and VAPPCLOUD_REAL_DEVICE_ID are required")
+	}
+
+	api, err := client.New(apiURL, token, "acceptance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("qa-e2e-provider-%d", time.Now().UTC().Unix())
+	config := func(cpu int) string {
+		return fmt.Sprintf(`
+provider "vappcloud" {
+  api_url = %q
+}
+resource "vappcloud_vmm" "qa" {
+  project_id          = %q
+  device_id           = %q
+  name                = %q
+  cpu_cores           = %d
+  memory_mb           = 2048
+  deletion_protection = false
+  retain_disk         = false
+}`, apiURL, projectID, deviceID, name, cpu)
+	}
+
+	var vmmID string
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: providerFactories(),
+		CheckDestroy: func(state *terraform.State) error {
+			if vmmID == "" {
+				return nil
+			}
+			var vmm client.VMM
+			err := api.Do(context.Background(), http.MethodGet, "/v1/vmms/"+client.Escape(vmmID), nil, &vmm, "")
+			if err == nil {
+				return fmt.Errorf("QA VMM %s still exists", vmmID)
+			}
+			if !client.IsNotFound(err) {
+				return err
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config(2),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("vappcloud_vmm.qa", "name", name),
+					resource.TestCheckResourceAttr("vappcloud_vmm.qa", "is_default", "false"),
+					func(state *terraform.State) error {
+						managed := state.RootModule().Resources["vappcloud_vmm.qa"]
+						if managed == nil || managed.Primary.ID == "" {
+							return fmt.Errorf("QA VMM ID was not recorded")
+						}
+						vmmID = managed.Primary.ID
+						return nil
+					},
+				),
+			},
+			{
+				PreConfig: func() {
+					if err := injectLiveVMMDrift(api, vmmID, name+"-drift"); err != nil {
+						t.Fatalf("inject controlled VMM drift: %v", err)
+					}
+				},
+				Config: config(4),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("vappcloud_vmm.qa", "name", name),
+					resource.TestCheckResourceAttr("vappcloud_vmm.qa", "cpu_cores", "4"),
+				),
+			},
+			{Config: config(4), PlanOnly: true},
+			{
+				ResourceName:      "vappcloud_vmm.qa",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) {
+					return projectID + "/" + vmmID, nil
+				},
+			},
+		},
+	})
+}
+
+func injectLiveVMMDrift(api *client.Client, vmmID, name string) error {
+	if vmmID == "" {
+		return fmt.Errorf("QA VMM ID is empty")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	var current client.VMM
+	if err := api.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(vmmID), nil, &current, ""); err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"name":                name,
+		"cpu_cores":           current.CPUCores,
+		"memory_mb":           current.MemoryMB,
+		"deletion_protection": false,
+		"retain_disk":         false,
+		"resource_version":    current.ResourceVersion,
+	}
+	var mutation client.Mutation[client.VMM]
+	key := fmt.Sprintf("qa-drift-%s-%d", vmmID, time.Now().UTC().UnixNano())
+	if err := api.Do(ctx, http.MethodPatch, "/v1/vmms/"+client.Escape(vmmID), payload, &mutation, key); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		var observed client.VMM
+		if err := api.Do(ctx, http.MethodGet, "/v1/vmms/"+client.Escape(vmmID), nil, &observed, ""); err == nil && observed.Name == name {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for controlled drift: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func valueFromJSON(value map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if raw, ok := value[key]; ok && raw != nil {
