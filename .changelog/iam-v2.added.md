@@ -1,2 +1,2 @@
 Add IAM policy, immutable policy version, attachment, and group resources, plus
-service-account access-key authentication through short-lived STS sessions.
+temporary role credentials through the Access Portal and OIDC web identity.

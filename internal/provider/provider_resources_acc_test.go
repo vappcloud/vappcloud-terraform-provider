@@ -23,10 +23,7 @@ func TestAccAllResourcesAndDataSources(t *testing.T) {
   secret_ids  = ["secret-example"]`
 		}
 		return fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 
 resource "vappcloud_project" "test" {
   name = "project-%s"
@@ -116,7 +113,7 @@ data "vappcloud_marketplace_applications" "all" {}
 data "vappcloud_marketplace_versions" "all" { application_id = "catalog-test" }
 data "vappcloud_github_connections" "all" { project_id = vappcloud_project.test.id }
 data "vappcloud_github_repositories" "all" { github_connection_id = "github-test" }
-`, server.URL, suffix, optionalProject, suffix, suffix, suffix, suffix, optionalApplication, replicas)
+`, acceptanceProviderBlock(server.URL), suffix, optionalProject, suffix, suffix, suffix, suffix, optionalApplication, replicas)
 	}
 
 	resource.Test(t, resource.TestCase{

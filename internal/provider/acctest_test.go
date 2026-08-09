@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,6 +24,38 @@ import (
 
 	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
 )
+
+func acceptanceSessionToken() string {
+	payload, _ := json.Marshal(map[string]any{
+		"exp": int64(4_102_444_800), "session_id": "sts-acceptance", "principal_type": "sts_session",
+	})
+	return "eyJhbGciOiJFUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
+func acceptanceProviderBlock(apiURL string) string {
+	return fmt.Sprintf(`provider "vappcloud" {
+  access_key_id     = "VAPPASIAACCEPTANCE"
+  secret_access_key = "acceptance-secret"
+  session_token     = %q
+  api_url           = %q
+}`, acceptanceSessionToken(), apiURL)
+}
+
+func requireSigV4(w http.ResponseWriter, r *http.Request) bool {
+	authorization := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authorization, "AWS4-HMAC-SHA256 ") ||
+		!strings.Contains(authorization, "/global/vappcloud/aws4_request") ||
+		r.Header.Get("X-Amz-Security-Token") != acceptanceSessionToken() ||
+		r.Header.Get("X-Amz-Date") == "" || r.Header.Get("X-Amz-Content-Sha256") == "" {
+		http.Error(w, `{"code":"UNAUTHENTICATED","message":"invalid SigV4 request"}`, http.StatusUnauthorized)
+		return false
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("X-Amz-Request-Id") == "" {
+		http.Error(w, `{"code":"INVALID_ARGUMENT","message":"missing replay ID"}`, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
 
 type acceptanceAPI struct {
 	mu          sync.Mutex
@@ -86,8 +119,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 		api.mu.Lock()
 		defer api.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if r.Header.Get("Authorization") != "Bearer header.payload.signature" {
-			http.Error(w, `{"code":"UNAUTHENTICATED","message":"missing token"}`, http.StatusUnauthorized)
+		if !requireSigV4(w, r) {
 			return
 		}
 		switch {

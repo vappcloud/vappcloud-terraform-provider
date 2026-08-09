@@ -33,7 +33,18 @@ func main() {
 	if apiURL == "" {
 		apiURL = "https://api.4lock.net"
 	}
-	api, err := client.New(apiURL, os.Getenv("VAPPCLOUD_TOKEN"), "sweeper")
+	api, err := client.NewWithConfig(client.Config{
+		BaseURL:              apiURL,
+		AccessKeyID:          os.Getenv("VAPPCLOUD_ACCESS_KEY_ID"),
+		SecretAccessKey:      os.Getenv("VAPPCLOUD_SECRET_ACCESS_KEY"),
+		SessionToken:         os.Getenv("VAPPCLOUD_SESSION_TOKEN"),
+		CredentialProcess:    os.Getenv("VAPPCLOUD_CREDENTIAL_PROCESS"),
+		WebIdentityTokenFile: os.Getenv("VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE"),
+		RoleARN:              os.Getenv("VAPPCLOUD_ROLE_ARN"),
+		SessionName:          os.Getenv("VAPPCLOUD_SESSION_NAME"),
+		ProviderVersion:      "sweeper",
+		MaxRetries:           5,
+	})
 	if err != nil {
 		panic(err)
 	}

@@ -18,10 +18,7 @@ func TestAccVMMResourceCRUDImportAndDrift(t *testing.T) {
 	defer server.Close()
 	config := func(cpu int, name string) string {
 		return fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 
 resource "vappcloud_vmm" "test" {
   project_id          = "prj-test"
@@ -31,7 +28,7 @@ resource "vappcloud_vmm" "test" {
   memory_mb           = 2048
   deletion_protection = false
   retain_disk         = false
-}`, server.URL, name, cpu)
+}`, acceptanceProviderBlock(server.URL), name, cpu)
 	}
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: providerFactories(),
@@ -104,17 +101,14 @@ func TestAccVMMInstanceProfileAttachment(t *testing.T) {
 			profile = fmt.Sprintf("  instance_profile_arn = %q\n", profileARN)
 		}
 		return fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 resource "vappcloud_vmm" "profile" {
   project_id  = "prj-test"
   device_id   = "dev-test"
   name        = "profile-test"
   cpu_cores   = 2
   memory_mb   = 2048
-%s}`, server.URL, profile)
+%s}`, acceptanceProviderBlock(server.URL), profile)
 	}
 	profileARN := "arn:vapp:iam::3:instance-profile/qa-profile"
 	resource.Test(t, resource.TestCase{
@@ -148,10 +142,7 @@ func TestAccVMMStressTwentyLifecycles(t *testing.T) {
 			server, api := newAcceptanceServer(t)
 			defer server.Close()
 			config := fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 resource "vappcloud_vmm" "stress" {
   project_id          = "prj-test"
   device_id           = "dev-test"
@@ -160,7 +151,7 @@ resource "vappcloud_vmm" "stress" {
   memory_mb           = 2048
   deletion_protection = false
   retain_disk         = false
-}`, server.URL, iteration+1)
+}`, acceptanceProviderBlock(server.URL), iteration+1)
 			resource.Test(t, resource.TestCase{
 				ProtoV6ProviderFactories: providerFactories(),
 				CheckDestroy:             checkAcceptanceDestroy(api),

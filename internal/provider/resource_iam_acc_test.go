@@ -40,8 +40,7 @@ func newIAMAcceptanceServer(t *testing.T) (*httptest.Server, *iamAcceptanceAPI) 
 		api.mu.Lock()
 		defer api.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if r.Header.Get("Authorization") != "Bearer header.payload.signature" {
-			http.Error(w, `{"code":"UNAUTHENTICATED","message":"missing token"}`, http.StatusUnauthorized)
+		if !requireSigV4(w, r) {
 			return
 		}
 		if r.Method != http.MethodGet && !requireIdempotency(w, r) {
@@ -280,10 +279,7 @@ func TestAccIAMResources(t *testing.T) {
 	config := func(action string, members []string) string {
 		membersJSON, _ := json.Marshal(members)
 		return fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 
 resource "vappcloud_iam_policy" "operator" {
   name        = "TerraformOperator"
@@ -321,7 +317,7 @@ resource "vappcloud_iam_policy_attachment" "operators" {
   target_type = "group"
   target_id   = vappcloud_iam_group.operators.id
 }
-`, server.URL, action, string(membersJSON))
+`, acceptanceProviderBlock(server.URL), action, string(membersJSON))
 	}
 
 	resource.Test(t, resource.TestCase{

@@ -3,12 +3,12 @@
 page_title: "vappcloud_iam_group Resource - VAppCloud"
 subcategory: "Managed Resources"
 description: |-
-  An IAM group and its complete user/service-account membership set.
+  An IAM group and its complete human-user membership set.
 ---
 
 # vappcloud_iam_group (Resource)
 
-An IAM group and its complete user/service-account membership set.
+An IAM group and its complete human-user membership set.
 
 ## Example Usage
 
@@ -33,7 +33,7 @@ variable "operator_principal_ids" {
 
 ### Optional
 
-- `member_ids` (Set of String) Complete set of user or service-account principal IDs in the group.
+- `member_ids` (Set of String) Complete set of human-user principal IDs in the group.
 
 ### Read-Only
 
