@@ -3,7 +3,7 @@ terraform {
   required_providers {
     vappcloud = {
       source  = "vappcloud/vappcloud"
-      version = "~> 1.0"
+      version = "~> 2.0"
     }
   }
 }

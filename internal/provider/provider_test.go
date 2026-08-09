@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,22 @@ import (
 	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
 )
 
+func providerTestClient(t *testing.T, baseURL string) *client.Client {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"exp": time.Now().Add(time.Hour).Unix(), "session_id": "provider-test-session", "principal_type": "sts_session",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionToken := "eyJhbGciOiJFUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+	c, err := client.New(baseURL, "VAPPASIAPROVIDER", "provider-test-secret", sessionToken, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
 func TestProviderContract(t *testing.T) {
 	t.Parallel()
 	p := New("test")()
@@ -26,13 +43,14 @@ func TestProviderContract(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() {
 		t.Fatalf("provider schema diagnostics: %v", schemaResponse.Diagnostics)
 	}
-	token, ok := schemaResponse.Schema.Attributes["token"]
-	if !ok || !token.IsSensitive() {
-		t.Fatal("provider token must be present and sensitive")
+	if _, ok := schemaResponse.Schema.Attributes["token"]; ok {
+		t.Fatal("legacy bearer token configuration must not be present")
 	}
-	secret, ok := schemaResponse.Schema.Attributes["secret_access_key"]
-	if !ok || !secret.IsSensitive() {
-		t.Fatal("provider secret_access_key must be present and sensitive")
+	for _, name := range []string{"secret_access_key", "session_token", "credential_process"} {
+		attribute, ok := schemaResponse.Schema.Attributes[name]
+		if !ok || !attribute.IsSensitive() {
+			t.Fatalf("provider %s must be present and sensitive", name)
+		}
 	}
 	resources := p.Resources(context.Background())
 	got := map[string]bool{}
@@ -83,10 +101,7 @@ func TestCompleteMutationRejectsFailedOperation(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	c, err := client.New(server.URL, "opaque-token", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := providerTestClient(t, server.URL)
 	result := client.Mutation[client.VMM]{
 		Resource:    client.VMM{ID: "vmm-test"},
 		OperationID: "op-failed",
@@ -119,10 +134,7 @@ func TestCompleteMutationRecoversResourceByOperationID(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c, err := client.New(server.URL, "opaque-token", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := providerTestClient(t, server.URL)
 	result := client.Mutation[client.VMM]{OperationID: "op-complete"}
 	var diagnostics diag.Diagnostics
 	if !completeMutation(context.Background(), c, &result, time.Second,

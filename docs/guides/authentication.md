@@ -2,38 +2,52 @@
 page_title: "Authentication - VAppCloud"
 subcategory: "Guides"
 description: |-
-  Configure STS authentication without storing credentials in state.
+  Configure short-lived, SigV4-signed role credentials without storing them in state.
 ---
 
 # Authentication
 
-In **Settings → Identity & Access → Service Accounts**, create a service
-account and an access key. The secret is shown once. Store the credentials in
-your automation platform's secret store and expose them to the provider as:
+VAppCloud provider v2 accepts only temporary role credentials. Generate a
+credential set from the **Access Portal → Command line or programmatic access**
+screen and expose all three one-time values to the provider:
 
 ```shell
 VAPPCLOUD_ACCESS_KEY_ID=...
 VAPPCLOUD_SECRET_ACCESS_KEY=...
+VAPPCLOUD_SESSION_TOKEN=...
 ```
 
-The provider exchanges the pair for a short-lived STS session token in memory.
-Neither the secret nor the session token is written to Terraform state. To
-assume a role, set `VAPPCLOUD_ROLE_ARN`; use `VAPPCLOUD_SESSION_NAME` to identify
-the run in audit records. A legacy short-lived bearer token may be supplied as
-`VAPPCLOUD_TOKEN`, but token and access-key authentication are mutually
+For interactive automation, let `vappctl` obtain and renew those credentials:
+
+```hcl
+provider "vappcloud" {
+  credential_process = "vappctl access credential-process --account-id acc_example --role-arn arn:vapp:iam::123:role/ProjectEditor"
+}
+```
+
+For GitHub Actions or another configured OIDC provider, configure
+`web_identity_token_file` and `role_arn`. The provider re-reads the token file
+whenever it refreshes the role session. These three modes are mutually
 exclusive.
 
-IAM policy attachments are the authorization source of truth. Policies may be
-attached directly or through groups, roles, and instance profiles. Evaluation is
-deny-first: an explicit deny overrides every allow. Revoking one access key
-leaves the service account's other keys active; disabling the service account
-denies every key and prevents new STS sessions.
+Every post-exchange API request is signed using `AWS4-HMAC-SHA256` with region
+`global` and service `vappcloud`. The session token is never sent as a Bearer
+token. Temporary credentials stay in memory and are never written to Terraform
+state.
 
-Service accounts are automation principals. Their roles may authorize VMM
-provisioning, but the VMM SSH, exec, and managed-tunnel APIs always require an
-active human principal. Terraform credentials therefore cannot be reused to
-open an interactive or remote-exec shell.
+IAM policy attachments are the authorization source of truth. A human or
+federated identity may assume a role only when its identity policy allows the
+exact role ARN and the role trust policy accepts that identity. Evaluation is
+deny-first: an explicit deny overrides every allow. Revoking a session, changing
+the trust or permission policy, or disabling the source principal invalidates
+the temporary credentials.
+
+Federated automation sessions may provision VMMs, but the VMM SSH, exec, and
+managed-tunnel APIs always require a recently authenticated human principal.
+Terraform credentials therefore cannot be reused to open an interactive or
+remote-exec shell.
 
 VAppCloud resources accept references such as `secret_ids`, not secret values.
-Never place an access-key secret in provider configuration, resource arguments,
-outputs, or variable defaults because those values may enter plan or state.
+Never place temporary credentials in resource arguments, outputs, variable
+defaults, logs, or checked-in configuration. Prefer environment variables,
+`credential_process`, or a mode-`0600` web identity token file.

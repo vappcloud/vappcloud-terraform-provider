@@ -27,20 +27,22 @@ type vappcloudProvider struct {
 }
 
 type providerModel struct {
-	Token              types.String  `tfsdk:"token"`
-	AccessKeyID        types.String  `tfsdk:"access_key_id"`
-	SecretAccessKey    types.String  `tfsdk:"secret_access_key"`
-	RoleARN            types.String  `tfsdk:"role_arn"`
-	SessionName        types.String  `tfsdk:"session_name"`
-	APIURL             types.String  `tfsdk:"api_url"`
-	EndpointOverrides  types.Map     `tfsdk:"endpoint_overrides"`
-	MaxRetries         types.Int64   `tfsdk:"max_retries"`
-	RequestTimeout     types.String  `tfsdk:"request_timeout"`
-	RetryMaxWait       types.String  `tfsdk:"retry_max_wait"`
-	RateLimitPerSecond types.Float64 `tfsdk:"rate_limit_per_second"`
-	ProxyURL           types.String  `tfsdk:"proxy_url"`
-	CACertificate      types.String  `tfsdk:"ca_certificate"`
-	InsecureSkipVerify types.Bool    `tfsdk:"insecure_skip_verify"`
+	AccessKeyID          types.String  `tfsdk:"access_key_id"`
+	SecretAccessKey      types.String  `tfsdk:"secret_access_key"`
+	SessionToken         types.String  `tfsdk:"session_token"`
+	CredentialProcess    types.String  `tfsdk:"credential_process"`
+	WebIdentityTokenFile types.String  `tfsdk:"web_identity_token_file"`
+	RoleARN              types.String  `tfsdk:"role_arn"`
+	SessionName          types.String  `tfsdk:"session_name"`
+	APIURL               types.String  `tfsdk:"api_url"`
+	EndpointOverrides    types.Map     `tfsdk:"endpoint_overrides"`
+	MaxRetries           types.Int64   `tfsdk:"max_retries"`
+	RequestTimeout       types.String  `tfsdk:"request_timeout"`
+	RetryMaxWait         types.String  `tfsdk:"retry_max_wait"`
+	RateLimitPerSecond   types.Float64 `tfsdk:"rate_limit_per_second"`
+	ProxyURL             types.String  `tfsdk:"proxy_url"`
+	CACertificate        types.String  `tfsdk:"ca_certificate"`
+	InsecureSkipVerify   types.Bool    `tfsdk:"insecure_skip_verify"`
 }
 
 type operationalConfigValidator struct{}
@@ -59,24 +61,40 @@ func (operationalConfigValidator) ValidateProvider(ctx context.Context, req prov
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if config.Token.IsUnknown() || config.AccessKeyID.IsUnknown() || config.SecretAccessKey.IsUnknown() {
+	if config.AccessKeyID.IsUnknown() || config.SecretAccessKey.IsUnknown() || config.SessionToken.IsUnknown() ||
+		config.CredentialProcess.IsUnknown() || config.WebIdentityTokenFile.IsUnknown() || config.RoleARN.IsUnknown() {
 		return
 	}
-	token := firstNonEmpty(config.Token.ValueString(), os.Getenv("VAPPCLOUD_TOKEN"))
 	accessKeyID := firstNonEmpty(config.AccessKeyID.ValueString(), os.Getenv("VAPPCLOUD_ACCESS_KEY_ID"))
 	secretAccessKey := firstNonEmpty(config.SecretAccessKey.ValueString(), os.Getenv("VAPPCLOUD_SECRET_ACCESS_KEY"))
-	if token == "" && accessKeyID == "" && secretAccessKey == "" {
+	sessionToken := firstNonEmpty(config.SessionToken.ValueString(), os.Getenv("VAPPCLOUD_SESSION_TOKEN"))
+	credentialProcess := firstNonEmpty(config.CredentialProcess.ValueString(), os.Getenv("VAPPCLOUD_CREDENTIAL_PROCESS"))
+	webIdentityTokenFile := firstNonEmpty(config.WebIdentityTokenFile.ValueString(), os.Getenv("VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE"))
+	roleARN := firstNonEmpty(config.RoleARN.ValueString(), os.Getenv("VAPPCLOUD_ROLE_ARN"))
+	staticConfigured := accessKeyID != "" || secretAccessKey != "" || sessionToken != ""
+	processConfigured := credentialProcess != ""
+	webIdentityConfigured := webIdentityTokenFile != "" || roleARN != ""
+	if !staticConfigured && !processConfigured && !webIdentityConfigured {
 		resp.Diagnostics.AddAttributeError(
-			path.Root("token"),
+			path.Root("access_key_id"),
 			"Missing VAppCloud credentials",
-			"Set token/VAPPCLOUD_TOKEN or access_key_id and secret_access_key (or their VAPPCLOUD_* environment variables).",
+			"Configure temporary access_key_id, secret_access_key, and session_token; credential_process; or web_identity_token_file with role_arn.",
 		)
 	}
-	if (accessKeyID == "") != (secretAccessKey == "") {
-		resp.Diagnostics.AddError("Incomplete VAppCloud access key", "Both access_key_id and secret_access_key must be configured together.")
+	if staticConfigured && (accessKeyID == "" || secretAccessKey == "" || sessionToken == "") {
+		resp.Diagnostics.AddError("Incomplete VAppCloud temporary credentials", "access_key_id, secret_access_key, and session_token must be configured together.")
 	}
-	if token != "" && accessKeyID != "" {
-		resp.Diagnostics.AddError("Ambiguous VAppCloud credentials", "Configure either token or access-key credentials, not both.")
+	if webIdentityConfigured && (webIdentityTokenFile == "" || roleARN == "") {
+		resp.Diagnostics.AddError("Incomplete VAppCloud web identity credentials", "web_identity_token_file and role_arn must be configured together.")
+	}
+	sources := 0
+	for _, configured := range []bool{staticConfigured, processConfigured, webIdentityConfigured} {
+		if configured {
+			sources++
+		}
+	}
+	if sources > 1 {
+		resp.Diagnostics.AddError("Ambiguous VAppCloud credentials", "Configure exactly one credential source: temporary credentials, credential_process, or web identity.")
 	}
 	if config.InsecureSkipVerify.ValueBool() && !config.CACertificate.IsNull() && config.CACertificate.ValueString() != "" {
 		resp.Diagnostics.AddError(
@@ -119,29 +137,38 @@ func (p *vappcloudProvider) Metadata(_ context.Context, _ provider.MetadataReque
 
 func (p *vappcloudProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = providerschema.Schema{
-		MarkdownDescription: "Manage VAppCloud resources with service-account access keys exchanged for short-lived STS sessions. Credentials are never persisted in state.",
+		MarkdownDescription: "Manage VAppCloud resources with short-lived, role-based credentials. Every API request is signed with SigV4 and credentials are never persisted in state.",
 		Attributes: map[string]providerschema.Attribute{
-			"token": providerschema.StringAttribute{
-				Optional:            true,
-				Sensitive:           true,
-				MarkdownDescription: "Legacy bearer or service token. Defaults to `VAPPCLOUD_TOKEN`. Cannot be combined with access-key credentials.",
-			},
 			"access_key_id": providerschema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Service-account access key ID. Defaults to `VAPPCLOUD_ACCESS_KEY_ID` and is exchanged for an in-memory STS session.",
+				MarkdownDescription: "Temporary access key ID generated by the VAppCloud Access Portal. Defaults to `VAPPCLOUD_ACCESS_KEY_ID`.",
 			},
 			"secret_access_key": providerschema.StringAttribute{
 				Optional:            true,
 				Sensitive:           true,
-				MarkdownDescription: "Service-account secret access key. Defaults to `VAPPCLOUD_SECRET_ACCESS_KEY`; it is never persisted in managed resource state.",
+				MarkdownDescription: "Temporary secret access key generated by the VAppCloud Access Portal. Defaults to `VAPPCLOUD_SECRET_ACCESS_KEY`.",
+			},
+			"session_token": providerschema.StringAttribute{
+				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "Temporary session token generated with the access key pair. Defaults to `VAPPCLOUD_SESSION_TOKEN`.",
+			},
+			"credential_process": providerschema.StringAttribute{
+				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "Command that returns AWS credential_process version 1 JSON. Defaults to `VAPPCLOUD_CREDENTIAL_PROCESS`.",
+			},
+			"web_identity_token_file": providerschema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Path to an OIDC token file used with role_arn. The file is re-read before each refresh. Defaults to `VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE`.",
 			},
 			"role_arn": providerschema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Optional IAM role ARN to assume when exchanging access-key credentials. Defaults to `VAPPCLOUD_ROLE_ARN`.",
+				MarkdownDescription: "IAM role ARN used with web identity. Defaults to `VAPPCLOUD_ROLE_ARN`.",
 			},
 			"session_name": providerschema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "STS session name used for audit records. Defaults to `VAPPCLOUD_SESSION_NAME`, then `terraform-provider`.",
+				MarkdownDescription: "Web identity session name used for audit records. Defaults to `VAPPCLOUD_SESSION_NAME`, then `terraform-provider`.",
 			},
 			"api_url": providerschema.StringAttribute{
 				Optional:            true,
@@ -195,17 +222,15 @@ func (p *vappcloudProvider) Configure(ctx context.Context, req provider.Configur
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if config.Token.IsUnknown() || config.AccessKeyID.IsUnknown() || config.SecretAccessKey.IsUnknown() ||
+	if config.AccessKeyID.IsUnknown() || config.SecretAccessKey.IsUnknown() || config.SessionToken.IsUnknown() ||
+		config.CredentialProcess.IsUnknown() || config.WebIdentityTokenFile.IsUnknown() ||
 		config.RoleARN.IsUnknown() || config.SessionName.IsUnknown() || config.APIURL.IsUnknown() {
 		resp.Diagnostics.AddError("Unknown provider configuration", "Provider credentials, role/session settings, and api_url must be known during configuration.")
 		return
 	}
-	token := config.Token.ValueString()
-	if token == "" {
-		token = os.Getenv("VAPPCLOUD_TOKEN")
-	}
 	accessKeyID := firstNonEmpty(config.AccessKeyID.ValueString(), os.Getenv("VAPPCLOUD_ACCESS_KEY_ID"))
 	secretAccessKey := firstNonEmpty(config.SecretAccessKey.ValueString(), os.Getenv("VAPPCLOUD_SECRET_ACCESS_KEY"))
+	sessionToken := firstNonEmpty(config.SessionToken.ValueString(), os.Getenv("VAPPCLOUD_SESSION_TOKEN"))
 	apiURL := config.APIURL.ValueString()
 	if apiURL == "" {
 		apiURL = os.Getenv("VAPPCLOUD_API_URL")
@@ -233,22 +258,24 @@ func (p *vappcloudProvider) Configure(ctx context.Context, req provider.Configur
 		maxRetries = int(config.MaxRetries.ValueInt64())
 	}
 	c, err := client.NewWithConfig(client.Config{
-		BaseURL:            apiURL,
-		Token:              token,
-		AccessKeyID:        accessKeyID,
-		SecretAccessKey:    secretAccessKey,
-		RoleARN:            firstNonEmpty(config.RoleARN.ValueString(), os.Getenv("VAPPCLOUD_ROLE_ARN")),
-		SessionName:        firstNonEmpty(config.SessionName.ValueString(), os.Getenv("VAPPCLOUD_SESSION_NAME")),
-		ProviderVersion:    p.version,
-		TerraformVersion:   req.TerraformVersion,
-		RequestTimeout:     requestTimeout,
-		MaxRetries:         maxRetries,
-		RetryMaxWait:       retryMaxWait,
-		RateLimitPerSecond: config.RateLimitPerSecond.ValueFloat64(),
-		ProxyURL:           config.ProxyURL.ValueString(),
-		CACertificatePEM:   config.CACertificate.ValueString(),
-		InsecureSkipVerify: config.InsecureSkipVerify.ValueBool(),
-		EndpointOverrides:  endpointOverrides,
+		BaseURL:              apiURL,
+		AccessKeyID:          accessKeyID,
+		SecretAccessKey:      secretAccessKey,
+		SessionToken:         sessionToken,
+		CredentialProcess:    firstNonEmpty(config.CredentialProcess.ValueString(), os.Getenv("VAPPCLOUD_CREDENTIAL_PROCESS")),
+		WebIdentityTokenFile: firstNonEmpty(config.WebIdentityTokenFile.ValueString(), os.Getenv("VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE")),
+		RoleARN:              firstNonEmpty(config.RoleARN.ValueString(), os.Getenv("VAPPCLOUD_ROLE_ARN")),
+		SessionName:          firstNonEmpty(config.SessionName.ValueString(), os.Getenv("VAPPCLOUD_SESSION_NAME")),
+		ProviderVersion:      p.version,
+		TerraformVersion:     req.TerraformVersion,
+		RequestTimeout:       requestTimeout,
+		MaxRetries:           maxRetries,
+		RetryMaxWait:         retryMaxWait,
+		RateLimitPerSecond:   config.RateLimitPerSecond.ValueFloat64(),
+		ProxyURL:             config.ProxyURL.ValueString(),
+		CACertificatePEM:     config.CACertificate.ValueString(),
+		InsecureSkipVerify:   config.InsecureSkipVerify.ValueBool(),
+		EndpointOverrides:    endpointOverrides,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to configure VAppCloud client", err.Error())

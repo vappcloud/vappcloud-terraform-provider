@@ -14,14 +14,11 @@ func TestAccProjectResource(t *testing.T) {
 	server, api := newAcceptanceServer(t)
 	defer server.Close()
 	config := fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 resource "vappcloud_project" "test" {
   name        = "acceptance"
   description = "created by acceptance"
-}`, server.URL)
+}`, acceptanceProviderBlock(server.URL))
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: providerFactories(),
 		CheckDestroy:             checkAcceptanceDestroy(api),
@@ -53,15 +50,12 @@ func TestAccProjectIdenticalResourcesHaveDistinctIDs(t *testing.T) {
 	server, api := newAcceptanceServer(t)
 	defer server.Close()
 	config := fmt.Sprintf(`
-provider "vappcloud" {
-  token   = "header.payload.signature"
-  api_url = %q
-}
+%s
 resource "vappcloud_project" "identical" {
   count       = 2
   name        = "identical"
   description = "same payload"
-}`, server.URL)
+}`, acceptanceProviderBlock(server.URL))
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: providerFactories(),
 		CheckDestroy:             checkAcceptanceDestroy(api),

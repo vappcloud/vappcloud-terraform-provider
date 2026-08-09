@@ -3,12 +3,12 @@
 page_title: "vappcloud_projects Data Source - VAppCloud"
 subcategory: "Data Sources"
 description: |-
-  Lists all projects visible to the service account.
+  Lists all projects visible to the current assumed-role session.
 ---
 
 # vappcloud_projects (Data Source)
 
-Lists all projects visible to the service account.
+Lists all projects visible to the current assumed-role session.
 
 ## Example Usage
 

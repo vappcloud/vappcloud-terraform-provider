@@ -36,14 +36,14 @@ func (r *iamGroupResource) Metadata(_ context.Context, req resource.MetadataRequ
 func (r *iamGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Version:             0,
-		MarkdownDescription: "An IAM group and its complete user/service-account membership set.",
+		MarkdownDescription: "An IAM group and its complete human-user membership set.",
 		Attributes: map[string]schema.Attribute{
 			"id":   computedID(),
 			"name": immutableString("Group name, unique within the organization."),
 			"arn":  computedString("Group ARN."),
 			"member_ids": schema.SetAttribute{
 				Optional: true, ElementType: types.StringType,
-				MarkdownDescription: "Complete set of user or service-account principal IDs in the group.",
+				MarkdownDescription: "Complete set of human-user principal IDs in the group.",
 			},
 			"member_count": schema.Int64Attribute{Computed: true, MarkdownDescription: "Current group member count."},
 			"created_at":   computedRFC3339("Creation timestamp in RFC3339 format.", true),

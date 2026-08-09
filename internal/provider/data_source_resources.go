@@ -71,7 +71,7 @@ func (d *projectsDataSource) Metadata(_ context.Context, req datasource.Metadata
 }
 func (d *projectsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Lists all projects visible to the service account.",
+		MarkdownDescription: "Lists all projects visible to the current assumed-role session.",
 		Attributes: map[string]schema.Attribute{
 			"projects": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 				"id": schema.StringAttribute{Computed: true}, "name": schema.StringAttribute{Computed: true},

@@ -4,10 +4,11 @@ The canonical repository builds all release artifacts. The Registry discovery
 repository receives the exact same immutable assets; it never builds provider
 code.
 
-Release candidates use `v1.0.0-rc.N` tags and remain private until API canary,
+Release candidates use `v2.0.0-rc.N` tags and remain private until API canary,
 rollback rehearsal, Terraform/OpenTofu acceptance, signature verification, SBOM,
-provenance, and documentation gates pass. The first public Registry release is
-`v1.0.0`; no public `0.x` release is published.
+provenance, and documentation gates pass. Version 2 is an intentional breaking
+authentication cutover: static credentials and bearer-token configuration are
+absent. The first release in this train is `v2.0.0`.
 
 Every release contains signed SHA-256 checksums, Linux/macOS/Windows archives for
 amd64 and arm64, SPDX SBOMs, and GitHub build provenance. The provider protocol is

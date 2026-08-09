@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,16 +17,41 @@ import (
 	"github.com/vappcloud/vappcloud-terraform-provider/internal/client"
 )
 
+func realAPIClient(apiURL string) (*client.Client, error) {
+	return client.NewWithConfig(client.Config{
+		BaseURL:              apiURL,
+		AccessKeyID:          os.Getenv("VAPPCLOUD_ACCESS_KEY_ID"),
+		SecretAccessKey:      os.Getenv("VAPPCLOUD_SECRET_ACCESS_KEY"),
+		SessionToken:         os.Getenv("VAPPCLOUD_SESSION_TOKEN"),
+		CredentialProcess:    os.Getenv("VAPPCLOUD_CREDENTIAL_PROCESS"),
+		WebIdentityTokenFile: os.Getenv("VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE"),
+		RoleARN:              os.Getenv("VAPPCLOUD_ROLE_ARN"),
+		SessionName:          os.Getenv("VAPPCLOUD_SESSION_NAME"),
+		ProviderVersion:      "acceptance",
+		MaxRetries:           5,
+	})
+}
+
+var nonFixtureNameCharacter = regexp.MustCompile(`[^a-z0-9-]+`)
+
+func realAcceptanceFixtureName(prefix string) string {
+	identity := strings.ToLower(strings.TrimSpace(os.Getenv("VAPPCLOUD_ACCEPTANCE_SUFFIX")))
+	identity = strings.Trim(nonFixtureNameCharacter.ReplaceAllString(identity, "-"), "-")
+	if identity == "" {
+		identity = "local"
+	}
+	return fmt.Sprintf("%s-%s-%d", prefix, identity, time.Now().UTC().UnixNano())
+}
+
 func TestAccRealAPIProjectLifecycle(t *testing.T) {
 	if os.Getenv("VAPPCLOUD_REAL_ACC") != "1" {
 		t.Skip("set VAPPCLOUD_REAL_ACC=1 to run credentialed real API acceptance")
 	}
 	apiURL := os.Getenv("VAPPCLOUD_API_URL")
-	token := os.Getenv("VAPPCLOUD_TOKEN")
-	if apiURL == "" || token == "" {
-		t.Fatal("VAPPCLOUD_API_URL and VAPPCLOUD_TOKEN are required")
+	if apiURL == "" {
+		t.Fatal("VAPPCLOUD_API_URL and a supported temporary credential source are required")
 	}
-	api, err := client.New(apiURL, token, "acceptance")
+	api, err := realAPIClient(apiURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,10 +59,10 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 		Principal map[string]any `json:"principal"`
 	}
 	if err := api.Do(context.Background(), http.MethodGet, "/v1/iam/me", nil, &authorization, ""); err != nil {
-		t.Fatalf("resolve service-account principal: %v", err)
+		t.Fatalf("resolve STS session principal: %v", err)
 	}
-	if valueFromJSON(authorization.Principal, "principalType", "principal_type") != "service_account" {
-		t.Fatal("VAPPCLOUD_TOKEN must belong to a service account")
+	if valueFromJSON(authorization.Principal, "principalType", "principal_type") != "sts_session" {
+		t.Fatal("acceptance credentials must resolve to an STS role session")
 	}
 	principalID := valueFromJSON(authorization.Principal, "id")
 	organizationID := valueFromJSON(authorization.Principal, "organizationId", "organization_id")
@@ -51,15 +78,15 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 			"resource_arn": fmt.Sprintf("arn:vapp:project::%s:project/new", organizationID),
 			"context_json": "{}",
 		}},
-	}, &simulation, ""); err != nil {
-		t.Fatalf("evaluate service-account project policy: %v", err)
+	}, &simulation, "acceptance-simulate-project-create"); err != nil {
+		t.Fatalf("evaluate assumed-role project policy: %v", err)
 	}
 	if len(simulation.Decisions) != 1 || !simulation.Decisions[0].Allowed {
-		t.Fatal("VAPPCLOUD_TOKEN must allow project:Create through IAM policy evaluation")
+		t.Fatal("the assumed role must allow project:Create through IAM policy evaluation")
 	}
 	vmmID := os.Getenv("VAPPCLOUD_REAL_ACC_VMM_ID")
 	if vmmID == "" {
-		t.Fatal("VAPPCLOUD_REAL_ACC_VMM_ID must identify an existing VMM for the service-account shell-denial check")
+		t.Fatal("VAPPCLOUD_REAL_ACC_VMM_ID must identify an existing VMM for the federated-session shell-denial check")
 	}
 	var existingVMM client.VMM
 	if err := api.Do(
@@ -70,12 +97,12 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 		&existingVMM,
 		"",
 	); err != nil {
-		t.Fatalf("read VMM used by service-account shell-denial check: %v", err)
+		t.Fatalf("read VMM used by federated-session shell-denial check: %v", err)
 	}
 	if existingVMM.ID != vmmID {
 		t.Fatalf("VMM denial fixture mismatch: requested %q, received %q", vmmID, existingVMM.ID)
 	}
-	idempotencyKey, err := client.NewIdempotencyKey("service-account-shell-denial")
+	idempotencyKey, err := client.NewIdempotencyKey("federated-session-shell-denial")
 	if err != nil {
 		t.Fatalf("create shell-denial idempotency key: %v", err)
 	}
@@ -84,28 +111,28 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 		context.Background(),
 		http.MethodPost,
 		"/v1/vmms/"+client.Escape(vmmID)+"/sessions",
-		map[string]any{"purpose": "ssh", "keyId": "service-accounts-have-no-ssh-keys"},
+		map[string]any{"purpose": "ssh", "keyId": "federated-sessions-have-no-ssh-keys"},
 		&shell,
 		idempotencyKey,
 	)
 	if err == nil {
-		t.Fatal("service-account token unexpectedly opened a VMM shell session")
+		t.Fatal("federated STS session unexpectedly opened a VMM shell session")
 	}
 	var apiErr *client.APIError
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("service-account shell denial returned a non-API error: %v", err)
+		t.Fatalf("federated-session shell denial returned a non-API error: %v", err)
 	}
 	if apiErr.StatusCode != http.StatusUnauthorized ||
 		apiErr.Code != "UNAUTHENTICATED" ||
 		apiErr.Message != "human authentication required" {
 		t.Fatalf(
-			"unexpected service-account shell denial: status=%d code=%q message=%q",
+			"unexpected federated-session shell denial: status=%d code=%q message=%q",
 			apiErr.StatusCode,
 			apiErr.Code,
 			apiErr.Message,
 		)
 	}
-	name := fmt.Sprintf("tf-nightly-%d", time.Now().UTC().Unix())
+	name := realAcceptanceFixtureName("tf-nightly")
 	config := fmt.Sprintf(`
 provider "vappcloud" {
   api_url = %q
@@ -147,18 +174,17 @@ func TestAccRealAPIVMMLifecycle(t *testing.T) {
 		t.Skip("set VAPPCLOUD_REAL_ACC=1 to run credentialed real API acceptance")
 	}
 	apiURL := os.Getenv("VAPPCLOUD_API_URL")
-	token := os.Getenv("VAPPCLOUD_TOKEN")
 	projectID := os.Getenv("VAPPCLOUD_REAL_PROJECT_ID")
 	deviceID := os.Getenv("VAPPCLOUD_REAL_DEVICE_ID")
-	if apiURL == "" || token == "" || projectID == "" || deviceID == "" {
-		t.Fatal("VAPPCLOUD_API_URL, VAPPCLOUD_TOKEN, VAPPCLOUD_REAL_PROJECT_ID, and VAPPCLOUD_REAL_DEVICE_ID are required")
+	if apiURL == "" || projectID == "" || deviceID == "" {
+		t.Fatal("VAPPCLOUD_API_URL, VAPPCLOUD_REAL_PROJECT_ID, VAPPCLOUD_REAL_DEVICE_ID, and a supported temporary credential source are required")
 	}
 
-	api, err := client.New(apiURL, token, "acceptance")
+	api, err := realAPIClient(apiURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := fmt.Sprintf("qa-e2e-provider-%d", time.Now().UTC().Unix())
+	name := realAcceptanceFixtureName("qa-e2e-provider")
 	config := func(cpu int) string {
 		return fmt.Sprintf(`
 provider "vappcloud" {

@@ -14,7 +14,7 @@ terraform {
   required_providers {
     vappcloud = {
       source  = "vappcloud/vappcloud"
-      version = "~> 1.0"
+      version = "~> 2.0"
     }
   }
 }
@@ -22,23 +22,26 @@ terraform {
 provider "vappcloud" {}
 ```
 
-Create a service account and access key, then set the one-time credentials as
-`VAPPCLOUD_ACCESS_KEY_ID` and `VAPPCLOUD_SECRET_ACCESS_KEY`. The provider
-exchanges them for a short-lived STS session token in memory; neither the access
-key secret nor the session token is written to Terraform state. Set
-`VAPPCLOUD_ROLE_ARN` to assume a role and optionally set
-`VAPPCLOUD_SESSION_NAME` for audit records. `VAPPCLOUD_TOKEN` remains available
-for legacy short-lived bearer tokens, but it cannot be combined with an access
-key pair. Optionally set `VAPPCLOUD_API_URL` to override
-`https://api.4lock.net`.
+Use one short-lived role credential source:
 
-IAM policy evaluation is deny-first. The effective permissions come from the
-service account's direct, group, role, and instance-profile attachments; an
-explicit deny always overrides an allow.
-Service-account authorization is deliberately non-interactive: even a
-service account with an editor or administrator role cannot create VMM SSH or
-exec sessions. Register a human SSH key and use `vappctl vmm ssh` or
-`vappctl vmm exec` for audited operator access.
+- Generate temporary credentials in the Access Portal and set
+  `VAPPCLOUD_ACCESS_KEY_ID`, `VAPPCLOUD_SECRET_ACCESS_KEY`, and
+  `VAPPCLOUD_SESSION_TOKEN` together.
+- Set `VAPPCLOUD_CREDENTIAL_PROCESS` to a command such as
+  `vappctl access credential-process --account-id <account-id> --role-arn <role-arn>`.
+- For CI, set `VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE` and `VAPPCLOUD_ROLE_ARN`.
+
+The provider re-reads web identity tokens when refreshing and signs every API
+request with SigV4. Credentials are never written to Terraform state. Set
+`VAPPCLOUD_SESSION_NAME` for web-identity audit records and optionally set
+`VAPPCLOUD_API_URL` to override `https://api.4lock.net`.
+
+IAM policy evaluation is deny-first. Human and federated identities can assume
+only roles allowed by both their identity policies and each role's trust
+policy; an explicit deny always overrides an allow. Federated STS sessions are
+deliberately non-interactive and cannot create VMM SSH or exec sessions.
+Register a human SSH key and use `vappctl vmm ssh` or `vappctl vmm exec` through
+the recently authenticated human channel for audited operator access.
 Transport behavior can be tuned with provider arguments for retries, request
 timeouts, rate limiting, proxies, custom CAs, TLS verification, and
 service-specific endpoint overrides.
@@ -57,7 +60,8 @@ configured QA project and device:
 
 ```text
 VAPPCLOUD_API_URL
-VAPPCLOUD_TOKEN
+VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE
+VAPPCLOUD_ROLE_ARN
 VAPPCLOUD_REAL_PROJECT_ID
 VAPPCLOUD_REAL_DEVICE_ID
 ```

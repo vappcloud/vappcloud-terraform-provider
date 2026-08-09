@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   real-api:
@@ -42,14 +43,29 @@ jobs:
         with:
           tofu_version: ${{ matrix.version }}
           tofu_wrapper: false
+      - name: Acquire protected GitHub OIDC token
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const token = await core.getIDToken('sts.vappcloud.com');
+            core.setSecret(token);
+            const tokenFile = path.join(process.env.RUNNER_TEMP, 'vappcloud-web-identity-token');
+            fs.writeFileSync(tokenFile, token, { mode: 0o600, flag: 'w' });
+            core.exportVariable('VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE', tokenFile);
       - name: Real API project lifecycle (${{ matrix.engine }} ${{ matrix.version }})
         env:
           TF_ACC: "1"
           TF_ACC_PROVIDER_HOST: ${{ matrix.engine == 'tofu' && 'registry.opentofu.org' || 'registry.terraform.io' }}
           TF_ACC_PROVIDER_NAMESPACE: vappcloud
           VAPPCLOUD_REAL_ACC: "1"
-          VAPPCLOUD_TOKEN: ${{ secrets.VAPPCLOUD_ACCEPTANCE_TOKEN }}
-          VAPPCLOUD_API_URL: ${{ secrets.VAPPCLOUD_ACCEPTANCE_API_URL }}
+          VAPPCLOUD_ROLE_ARN: ${{ vars.VAPPCLOUD_ACCEPTANCE_ROLE_ARN }}
+          VAPPCLOUD_API_URL: ${{ vars.VAPPCLOUD_ACCEPTANCE_API_URL }}
+          VAPPCLOUD_REAL_PROJECT_ID: ${{ vars.VAPPCLOUD_ACCEPTANCE_PROJECT_ID }}
+          VAPPCLOUD_REAL_DEVICE_ID: ${{ vars.VAPPCLOUD_ACCEPTANCE_DEVICE_ID }}
+          VAPPCLOUD_REAL_ACC_VMM_ID: ${{ vars.VAPPCLOUD_ACCEPTANCE_VMM_ID }}
+          VAPPCLOUD_ACCEPTANCE_SUFFIX: ${{ matrix.engine }}-${{ matrix.version }}-${{ github.run_attempt }}
         run: |
           TF_ACC_TERRAFORM_PATH="$(command -v '${{ matrix.engine }}')" \
             go test -v -timeout 20m ./internal/provider -run '^TestAccReal'

@@ -20,9 +20,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"golang.org/x/time/rate"
 )
@@ -33,72 +34,56 @@ const (
 )
 
 type Config struct {
-	BaseURL            string
-	Token              string
-	AccessKeyID        string
-	SecretAccessKey    string
-	RoleARN            string
-	SessionName        string
-	ProviderVersion    string
-	TerraformVersion   string
-	AppendUserAgent    string
-	EndpointOverrides  map[string]string
-	RequestTimeout     time.Duration
-	MaxRetries         int
-	RetryMaxWait       time.Duration
-	RateLimitPerSecond float64
-	ProxyURL           string
-	CACertificatePEM   string
-	InsecureSkipVerify bool
+	BaseURL              string
+	AccessKeyID          string
+	SecretAccessKey      string
+	SessionToken         string
+	CredentialProcess    string
+	WebIdentityTokenFile string
+	RoleARN              string
+	SessionName          string
+	ProviderVersion      string
+	TerraformVersion     string
+	AppendUserAgent      string
+	EndpointOverrides    map[string]string
+	RequestTimeout       time.Duration
+	MaxRetries           int
+	RetryMaxWait         time.Duration
+	RateLimitPerSecond   float64
+	ProxyURL             string
+	CACertificatePEM     string
+	InsecureSkipVerify   bool
 }
 
 type Client struct {
 	baseURL      *url.URL
 	endpoints    map[string]*url.URL
-	token        string
-	accessKeyID  string
-	secretKey    string
-	roleARN      string
-	sessionName  string
-	jwt          string
-	jwtExpiresAt time.Time
+	credentials  *aws.CredentialsCache
+	refreshable  bool
+	signer       *v4.Signer
 	userAgent    string
 	http         *http.Client
 	maxAttempts  int
 	retryMaxWait time.Duration
 	limiter      *rate.Limiter
-	mu           sync.Mutex
 	sleep        func(context.Context, time.Duration) error
 }
 
-type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int64  `json:"expires_in"`
-}
-
-type stsCredentialResponse struct {
-	Credentials struct {
-		SessionToken string    `json:"SessionToken"`
-		Expiration   time.Time `json:"Expiration"`
-	} `json:"Credentials"`
-}
-
-func New(baseURL, token, version string) (*Client, error) {
+func New(baseURL, accessKeyID, secretAccessKey, sessionToken, version string) (*Client, error) {
 	return NewWithConfig(Config{
-		BaseURL: baseURL, Token: token, ProviderVersion: version, MaxRetries: defaultRetries,
+		BaseURL: baseURL, AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey,
+		SessionToken: sessionToken, ProviderVersion: version, MaxRetries: defaultRetries,
 	})
 }
 
 func NewWithConfig(config Config) (*Client, error) {
-	config.Token = strings.TrimSpace(config.Token)
 	config.AccessKeyID = strings.TrimSpace(config.AccessKeyID)
 	config.SecretAccessKey = strings.TrimSpace(config.SecretAccessKey)
-	if config.Token != "" && (config.AccessKeyID != "" || config.SecretAccessKey != "") {
-		return nil, errors.New("VAppCloud token and access-key credentials cannot be configured together")
-	}
-	if config.Token == "" && (config.AccessKeyID == "" || config.SecretAccessKey == "") {
-		return nil, errors.New("VAppCloud token or a complete access-key credential pair is required")
-	}
+	config.SessionToken = strings.TrimSpace(config.SessionToken)
+	config.CredentialProcess = strings.TrimSpace(config.CredentialProcess)
+	config.WebIdentityTokenFile = strings.TrimSpace(config.WebIdentityTokenFile)
+	config.RoleARN = strings.TrimSpace(config.RoleARN)
+	config.SessionName = strings.TrimSpace(config.SessionName)
 	u, err := ValidateBaseURL(config.BaseURL)
 	if err != nil {
 		return nil, err
@@ -173,16 +158,21 @@ func NewWithConfig(config Config) (*Client, error) {
 		}
 		endpoints[service] = override
 	}
-	return &Client{
-		baseURL:      u,
-		endpoints:    endpoints,
-		token:        config.Token,
-		accessKeyID:  config.AccessKeyID,
-		secretKey:    config.SecretAccessKey,
-		roleARN:      strings.TrimSpace(config.RoleARN),
-		sessionName:  strings.TrimSpace(config.SessionName),
-		userAgent:    userAgent,
-		http:         &http.Client{Timeout: timeout, Transport: transport},
+	c := &Client{
+		baseURL:   u,
+		endpoints: endpoints,
+		signer:    v4.NewSigner(),
+		userAgent: userAgent,
+		http: &http.Client{
+			Timeout:   timeout,
+			Transport: transport,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				// Temporary credentials and OIDC assertions must never be replayed
+				// to a redirect target. Callers can explicitly configure the final
+				// VAppCloud API endpoint instead.
+				return http.ErrUseLastResponse
+			},
+		},
 		maxAttempts:  maxRetries + 1,
 		retryMaxWait: retryMaxWait,
 		limiter:      limiter,
@@ -196,7 +186,17 @@ func NewWithConfig(config Config) (*Client, error) {
 				return nil
 			}
 		},
-	}, nil
+	}
+	provider, refreshable, err := newCredentialProvider(config, c)
+	if err != nil {
+		return nil, err
+	}
+	c.credentials = aws.NewCredentialsCache(provider, func(options *aws.CredentialsCacheOptions) {
+		options.ExpiryWindow = credentialRefreshWindow
+		options.ExpiryWindowJitterFrac = 0.2
+	})
+	c.refreshable = refreshable
+	return c, nil
 }
 
 // ValidateBaseURL requires encrypted transport for remote APIs while retaining
@@ -225,110 +225,8 @@ func (c *Client) SetHTTPClient(h *http.Client) {
 	c.http = h
 }
 
-func (c *Client) authToken(ctx context.Context) (string, error) {
-	if c.accessKeyID == "" && !strings.HasPrefix(c.token, "vappsvc_") {
-		return c.token, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.jwt != "" && time.Now().Add(30*time.Second).Before(c.jwtExpiresAt) {
-		return c.jwt, nil
-	}
-	if c.accessKeyID != "" {
-		return c.exchangeAccessKey(ctx)
-	}
-	body, _ := json.Marshal(map[string]string{"service_token": c.token})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL.String()+"/token", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-	res, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("exchange service token: %w", err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode/100 != 2 {
-		return "", decodeAPIError(res)
-	}
-	var out tokenResponse
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode token exchange: %w", err)
-	}
-	if out.AccessToken == "" {
-		return "", errors.New("token exchange returned an empty access token")
-	}
-	if out.ExpiresIn <= 0 {
-		out.ExpiresIn = 300
-	}
-	c.jwt = out.AccessToken
-	c.jwtExpiresAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
-	return c.jwt, nil
-}
-
-func (c *Client) exchangeAccessKey(ctx context.Context) (string, error) {
-	path := "/v1/sts/get-session-token"
-	operation := "session_token"
-	if c.roleARN != "" {
-		path = "/v1/sts/assume-role"
-		operation = "assume_role"
-	}
-	sessionName := c.sessionName
-	if sessionName == "" {
-		sessionName = "terraform-provider"
-	}
-	body, err := json.Marshal(map[string]any{
-		"access_key_id":     c.accessKeyID,
-		"secret_access_key": c.secretKey,
-		"duration_seconds":  3600,
-		"session_name":      sessionName,
-		"role_arn":          c.roleARN,
-	})
-	if err != nil {
-		return "", fmt.Errorf("encode VAppCloud STS %s request: %w", operation, err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.requestURL(path), bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-	res, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("exchange VAppCloud access key: %w", err)
-	}
-	if res.StatusCode/100 != 2 {
-		apiErr := decodeAPIError(res)
-		apiErr.Message = redact(apiErr.Message, c.secretKey)
-		for key, value := range apiErr.Details {
-			apiErr.Details[key] = redact(value, c.secretKey)
-		}
-		return "", apiErr
-	}
-	defer func() { _ = res.Body.Close() }()
-	var out stsCredentialResponse
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode VAppCloud STS credentials: %w", err)
-	}
-	if out.Credentials.SessionToken == "" {
-		return "", errors.New("VAppCloud STS returned an empty session token")
-	}
-	expiresAt := out.Credentials.Expiration
-	if expiresAt.IsZero() {
-		expiresAt = time.Now().Add(time.Hour)
-	}
-	c.jwt = out.Credentials.SessionToken
-	c.jwtExpiresAt = expiresAt
-	return c.jwt, nil
-}
-
 func (c *Client) Do(ctx context.Context, method, path string, body any, out any, idempotencyKey string) error {
-	token, err := c.authToken(ctx)
-	if err != nil {
-		return err
-	}
+	var err error
 	var encoded []byte
 	if body != nil {
 		encoded, err = json.Marshal(body)
@@ -341,7 +239,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 		return errors.New("mutation requires an idempotency key")
 	}
 
-	reauthenticated := false
+	refreshedCredentials := false
 	for attempt := 0; attempt < c.maxAttempts; attempt++ {
 		if c.limiter != nil {
 			if err := c.limiter.Wait(ctx); err != nil {
@@ -355,13 +253,44 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 			return reqErr
 		}
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("User-Agent", c.userAgent)
+		payloadHash := sha256.Sum256(encoded)
+		req.Header.Set("X-Amz-Content-Sha256", hex.EncodeToString(payloadHash[:]))
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		if idempotencyKey != "" {
 			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		if mutation {
+			requestID, requestIDErr := newRequestID()
+			if requestIDErr != nil {
+				return requestIDErr
+			}
+			req.Header.Set("X-Amz-Request-Id", requestID)
+		}
+		credentials, credentialsErr := c.credentials.Retrieve(ctx)
+		if credentialsErr != nil {
+			return fmt.Errorf("resolve VAppCloud temporary credentials: %w", credentialsErr)
+		}
+		if err := validateTemporaryCredentials(credentials); err != nil {
+			return err
+		}
+		if signErr := c.signer.SignHTTP(
+			ctx,
+			credentials,
+			req,
+			req.Header.Get("X-Amz-Content-Sha256"),
+			"vappcloud",
+			"global",
+			time.Now().UTC(),
+			func(options *v4.SignerOptions) {
+				// The API canonicalizer and vappctl preserve existing canonical %XX
+				// path octets. Avoid signing a double-escaped representation.
+				options.DisableURIPathEscaping = true
+			},
+		); signErr != nil {
+			return fmt.Errorf("sign VAppCloud API request: %w", signErr)
 		}
 		res, doErr := c.http.Do(req)
 		if doErr != nil {
@@ -400,23 +329,19 @@ func (c *Client) Do(ctx context.Context, method, path string, body any, out any,
 		}
 
 		apiErr := decodeAPIError(res)
-		if res.StatusCode == http.StatusUnauthorized && (strings.HasPrefix(c.token, "vappsvc_") || c.accessKeyID != "") && !reauthenticated {
-			reauthenticated = true
-			c.mu.Lock()
-			c.jwt = ""
-			c.jwtExpiresAt = time.Time{}
-			c.mu.Unlock()
-			token, err = c.authToken(ctx)
-			if err != nil {
-				return err
-			}
+		apiErr.Message = redact(apiErr.Message, credentials.AccessKeyID, credentials.SecretAccessKey, credentials.SessionToken)
+		for key, value := range apiErr.Details {
+			apiErr.Details[key] = redact(value, credentials.AccessKeyID, credentials.SecretAccessKey, credentials.SessionToken)
+		}
+		if res.StatusCode == http.StatusUnauthorized && c.refreshable && !refreshedCredentials {
+			refreshedCredentials = true
+			c.credentials.Invalidate()
 			continue
 		}
+		if res.StatusCode == http.StatusUnauthorized && !c.refreshable {
+			return fmt.Errorf("VAppCloud temporary credentials were rejected; renew them through the Access Portal or vappctl: %w", apiErr)
+		}
 		if !apiErr.Retryable || attempt == c.maxAttempts-1 {
-			apiErr.Message = redact(apiErr.Message, c.token, c.secretKey, token)
-			for key, value := range apiErr.Details {
-				apiErr.Details[key] = redact(value, c.token, c.secretKey, token)
-			}
 			return apiErr
 		}
 		if err := c.sleep(ctx, c.backoff(attempt, apiErr.RetryAfter)); err != nil {
@@ -564,6 +489,19 @@ func (c *Client) backoff(attempt int, retryAfter time.Duration) time.Duration {
 	base := math.Min(c.retryMaxWait.Seconds(), math.Pow(2, float64(attempt)))
 	jitter := 0.75 + rand.Float64()*0.5
 	return time.Duration(base * jitter * float64(time.Second))
+}
+
+func newRequestID() (string, error) {
+	var id [16]byte
+	if _, err := cryptorand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate signed request ID: %w", err)
+	}
+	id[6] = (id[6] & 0x0f) | 0x40
+	id[8] = (id[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%08x-%04x-%04x-%04x-%012x",
+		id[0:4], id[4:6], id[6:8], id[8:10], id[10:16],
+	), nil
 }
 
 // NewIdempotencyKey returns an invocation-scoped replay key. Create calls use

@@ -2,30 +2,139 @@ package client
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
 
-func TestMutationRequiresIdempotencyKey(t *testing.T) {
-	t.Parallel()
-	c, err := New("https://example.test", "header.payload.signature", "test")
+func testSessionToken(t *testing.T, expiresAt time.Time, sessionID string) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"exp": expiresAt.Unix(), "session_id": sessionID, "principal_type": "sts_session",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.Do(context.Background(), http.MethodPost, "/v1/projects", map[string]string{"name": "x"}, nil, "")
+	return "eyJhbGciOiJFUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
+func newTestClient(t *testing.T, baseURL string) *Client {
+	t.Helper()
+	c, err := New(
+		baseURL,
+		"VAPPASIATEST",
+		"fixture-temporary-secret",
+		testSessionToken(t, time.Now().Add(time.Hour), "session-test"),
+		"test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func testConfig(t *testing.T, baseURL string) Config {
+	t.Helper()
+	return Config{
+		BaseURL: baseURL, AccessKeyID: "VAPPASIATEST", SecretAccessKey: "fixture-temporary-secret",
+		SessionToken: testSessionToken(t, time.Now().Add(time.Hour), "session-test"), ProviderVersion: "test",
+	}
+}
+
+func TestCredentialProcessHelper(t *testing.T) {
+	if os.Getenv("VAPPCLOUD_CREDENTIAL_PROCESS_HELPER") != "1" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(os.Getenv("VAPPCLOUD_CREDENTIAL_PROCESS_RESPONSE"))
+	os.Exit(0)
+}
+
+func TestCredentialProcessUsesDirectTemporaryCredentials(t *testing.T) {
+	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	response, err := json.Marshal(map[string]any{
+		"Version": 1, "AccessKeyId": "VAPPASIAPROCESS", "SecretAccessKey": "process-secret",
+		"SessionToken": testSessionToken(t, expires, "process-session"), "Expiration": expires.Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VAPPCLOUD_CREDENTIAL_PROCESS_HELPER", "1")
+	t.Setenv("VAPPCLOUD_CREDENTIAL_PROCESS_RESPONSE", string(response))
+	provider := credentialProcessProvider{
+		command: fmt.Sprintf("%q -test.run=^TestCredentialProcessHelper$", os.Args[0]),
+	}
+	credentials, err := temporaryCredentialsProvider{provider: provider}.Retrieve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.AccessKeyID != "VAPPASIAPROCESS" || credentials.SecretAccessKey != "process-secret" ||
+		credentials.SessionToken == "" || !credentials.CanExpire || !credentials.Expires.Equal(expires) {
+		t.Fatalf("unexpected credential_process result: %+v", credentials)
+	}
+}
+
+func TestCredentialProcessParserDoesNotInvokeShellSyntax(t *testing.T) {
+	t.Parallel()
+	arguments, err := splitCredentialProcess(`vappctl access credential-process --account-id acc_example --role-arn "arn:vapp:iam::1:role/Project Editor";echo`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"vappctl", "access", "credential-process", "--account-id", "acc_example", "--role-arn", "arn:vapp:iam::1:role/Project Editor;echo"}
+	if len(arguments) != len(want) {
+		t.Fatalf("unexpected arguments: %#v", arguments)
+	}
+	for index := range want {
+		if arguments[index] != want[index] {
+			t.Fatalf("argument %d = %q, want %q", index, arguments[index], want[index])
+		}
+	}
+	if _, err := splitCredentialProcess("vappctl\nmalicious"); err == nil {
+		t.Fatal("credential_process accepted a newline")
+	}
+	windows, err := splitCredentialProcess(`"C:\Program Files\VAppCloud\vappctl.exe" access credential-process --account-id acc_example --role-arn role`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if windows[0] != `C:\Program Files\VAppCloud\vappctl.exe` {
+		t.Fatalf("Windows credential_process executable was corrupted: %q", windows[0])
+	}
+	unc, err := splitCredentialProcess(`"\\server\share\vappctl.exe" access credential-process --account-id acc_example --role-arn role`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unc[0] != `\\server\share\vappctl.exe` {
+		t.Fatalf("Windows UNC credential_process executable was corrupted: %q", unc[0])
+	}
+	trailing, err := splitCredentialProcess(`"C:\Program Files\VAppCloud\\" access credential-process --account-id acc_example --role-arn role`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trailing[0] != `C:\Program Files\VAppCloud\` {
+		t.Fatalf("Windows trailing backslash was corrupted: %q", trailing[0])
+	}
+}
+
+func TestMutationRequiresIdempotencyKey(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(t, "https://example.test")
+	err := c.Do(context.Background(), http.MethodPost, "/v1/projects", map[string]string{"name": "x"}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "idempotency") {
 		t.Fatalf("expected idempotency error, got %v", err)
 	}
@@ -97,80 +206,124 @@ func TestStableIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestServiceTokenExchangeAndRedaction(t *testing.T) {
+func TestSigV4SignsEveryRequestWithTemporaryCredentials(t *testing.T) {
 	t.Parallel()
-	const secret = "vappsvc_fixture_redacted"
-	var exchanges atomic.Int32
+	var firstAuthorization string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/token":
-			exchanges.Add(1)
-			var body map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["service_token"] != secret {
-				t.Errorf("token exchange did not receive service token")
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "header.payload.signature", "expires_in": 300})
-		case "/v1/projects":
-			if got := r.Header.Get("Authorization"); got != "Bearer header.payload.signature" {
-				t.Errorf("unexpected authorization header %q", got)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(APIError{Code: "INVALID_ARGUMENT", Message: "reflected " + secret})
-		default:
-			http.NotFound(w, r)
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") {
+			t.Errorf("request was not SigV4 signed: %q", r.Header.Get("Authorization"))
 		}
+		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			t.Error("STS session token was sent as a Bearer token")
+		}
+		if r.Header.Get("X-Amz-Security-Token") == "" || r.Header.Get("X-Amz-Date") == "" ||
+			r.Header.Get("X-Amz-Content-Sha256") == "" {
+			t.Error("signed request omitted required temporary-credential headers")
+		}
+		if r.Header.Get("X-Amz-Request-Id") == "" || r.Header.Get("Idempotency-Key") != "stable-key" {
+			t.Error("mutation omitted replay-protection headers")
+		}
+		firstAuthorization = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}))
 	defer server.Close()
 
-	c, err := New(server.URL, secret, "test")
-	if err != nil {
+	c := newTestClient(t, server.URL)
+	if err := c.Do(context.Background(), http.MethodPost, "/v1/projects?b=2&a=1", map[string]string{"name": "signed"}, nil, "stable-key"); err != nil {
 		t.Fatal(err)
 	}
-	err = c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
-	if err == nil {
-		t.Fatal("expected API error")
+	if !strings.Contains(firstAuthorization, "/global/vappcloud/aws4_request") {
+		t.Fatalf("unexpected SigV4 credential scope: %q", firstAuthorization)
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("service token leaked in diagnostic: %s", err)
-	}
-	if exchanges.Load() != 1 {
-		t.Fatalf("expected one token exchange, got %d", exchanges.Load())
+	for _, signedHeader := range []string{"host", "x-amz-content-sha256", "x-amz-date", "x-amz-request-id", "x-amz-security-token"} {
+		if !strings.Contains(firstAuthorization, signedHeader) {
+			t.Errorf("authorization omitted signed header %q: %s", signedHeader, firstAuthorization)
+		}
 	}
 }
 
-func TestAccessKeySTSExchangeCachesAndRedacts(t *testing.T) {
+func TestSigV4PreservesAlreadyEscapedPathOctets(t *testing.T) {
 	t.Parallel()
-	const secret = "fixture-secret-access-key"
+	client := newTestClient(t, "https://api.example.test")
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.EscapedPath() != "/v1/projects/a%2Fb" {
+			t.Fatalf("escaped path changed before signing: %q", request.URL.EscapedPath())
+		}
+		actual := request.Header.Get("Authorization")
+		signingTime, err := time.Parse("20060102T150405Z", request.Header.Get("X-Amz-Date"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		credentials, err := client.credentials.Retrieve(request.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := request.Clone(request.Context())
+		expected.Header = request.Header.Clone()
+		expected.Header.Del("Authorization")
+		if err := v4.NewSigner().SignHTTP(
+			request.Context(), credentials, expected,
+			request.Header.Get("X-Amz-Content-Sha256"), "vappcloud", "global", signingTime,
+			func(options *v4.SignerOptions) { options.DisableURIPathEscaping = true },
+		); err != nil {
+			t.Fatal(err)
+		}
+		if actual != expected.Header.Get("Authorization") {
+			t.Fatal("provider signature did not preserve the canonical escaped path")
+		}
+		wrong := request.Clone(request.Context())
+		wrong.Header = request.Header.Clone()
+		wrong.Header.Del("Authorization")
+		if err := v4.NewSigner().SignHTTP(
+			request.Context(), credentials, wrong,
+			request.Header.Get("X-Amz-Content-Sha256"), "vappcloud", "global", signingTime,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if actual == wrong.Header.Get("Authorization") {
+			t.Fatal("test path did not distinguish preserved from double-escaped signing")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Request:    request,
+		}, nil
+	})
+	var response map[string]bool
+	if err := client.Do(context.Background(), http.MethodGet, "/v1/projects/a%2Fb?z=last&a=first", nil, &response, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWebIdentityReReadsTokenAndRefreshesAfterUnauthorized(t *testing.T) {
+	t.Parallel()
+	tokenFile := t.TempDir() + "/oidc-token"
+	if err := os.WriteFile(tokenFile, []byte("oidc-token-one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var exchanges atomic.Int32
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/sts/get-session-token":
-			exchanges.Add(1)
-			if r.Header.Get("Authorization") != "" {
-				t.Error("STS exchange sent an authorization header")
-			}
+		case "/v1/sts/assume-role-with-web-identity":
+			n := exchanges.Add(1)
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["access_key_id"] != "VAPPAKFIXTURE" || body["secret_access_key"] != secret ||
-				body["session_name"] != "terraform-ci" {
-				t.Errorf("unexpected STS request: %#v", body)
+			if body["web_identity_token"] != "oidc-token-one" || body["role_arn"] != "arn:vapp:iam::42:role/deploy" {
+				t.Errorf("unexpected web identity request: %#v", body)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"Credentials": map[string]any{
-					"SessionToken": "sts.header.signature",
-					"Expiration":   time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
-				},
-			})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Credentials": map[string]any{
+				"AccessKeyId":     "VAPPASIAWEB" + strconv.FormatInt(int64(n), 10),
+				"SecretAccessKey": "temporary-secret", "SessionToken": testSessionToken(t, time.Now().Add(time.Hour), "web-session"),
+				"Expiration": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			}})
 		case "/v1/projects":
-			requests.Add(1)
-			if got := r.Header.Get("Authorization"); got != "Bearer sts.header.signature" {
-				t.Errorf("unexpected authorization header %q", got)
+			if requests.Add(1) == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
 			}
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(APIError{Code: "INVALID_ARGUMENT", Message: "reflected " + secret})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}
@@ -178,65 +331,88 @@ func TestAccessKeySTSExchangeCachesAndRedacts(t *testing.T) {
 	defer server.Close()
 
 	c, err := NewWithConfig(Config{
-		BaseURL: server.URL, AccessKeyID: "VAPPAKFIXTURE", SecretAccessKey: secret,
-		SessionName: "terraform-ci", ProviderVersion: "test",
+		BaseURL: server.URL, WebIdentityTokenFile: tokenFile,
+		RoleARN: "arn:vapp:iam::42:role/deploy", ProviderVersion: "test", MaxRetries: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		err = c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
-		if err == nil {
-			t.Fatal("expected API error")
-		}
-		if strings.Contains(err.Error(), secret) {
-			t.Fatalf("secret access key leaked in diagnostic: %s", err)
-		}
+	if err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, ""); err != nil {
+		t.Fatal(err)
 	}
-	if exchanges.Load() != 1 || requests.Load() != 2 {
-		t.Fatalf("expected one cached exchange and two requests, got exchanges=%d requests=%d", exchanges.Load(), requests.Load())
+	if exchanges.Load() != 2 || requests.Load() != 2 {
+		t.Fatalf("expected refresh after unauthorized, got exchanges=%d requests=%d", exchanges.Load(), requests.Load())
 	}
 }
 
-func TestAccessKeyAssumeRoleExchange(t *testing.T) {
+func TestTemporaryCredentialsAreNeverForwardedAcrossRedirects(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/sts/assume-role" {
-			http.NotFound(w, r)
-			return
-		}
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["role_arn"] != "arn:vapp:iam::42:role/deploy" {
-			t.Errorf("unexpected role ARN: %#v", body["role_arn"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"Credentials": map[string]any{
-				"SessionToken": "assumed.header.signature",
-				"Expiration":   time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
-			},
-		})
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectedRequests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
 	}))
-	defer server.Close()
+	defer destination.Close()
 
-	c, err := NewWithConfig(Config{
-		BaseURL: server.URL, AccessKeyID: "VAPPAKFIXTURE", SecretAccessKey: "secret",
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", destination.URL+"/capture")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	client := newTestClient(t, origin.URL)
+	var response map[string]any
+	if err := client.Do(context.Background(), http.MethodGet, "/v1/projects", nil, &response, ""); err == nil {
+		t.Fatal("expected redirect response to be rejected")
+	}
+	if redirectedRequests.Load() != 0 {
+		t.Fatal("SigV4 temporary credentials were forwarded to a redirect target")
+	}
+}
+
+func TestWebIdentityAssertionIsNeverReplayedAcrossRedirects(t *testing.T) {
+	t.Parallel()
+	tokenFile := t.TempDir() + "/oidc-token"
+	if err := os.WriteFile(tokenFile, []byte("sensitive-oidc-assertion"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectedRequests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer destination.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", destination.URL+"/capture")
+		w.WriteHeader(http.StatusPermanentRedirect)
+	}))
+	defer origin.Close()
+
+	client, err := NewWithConfig(Config{
+		BaseURL: origin.URL, WebIdentityTokenFile: tokenFile,
 		RoleARN: "arn:vapp:iam::42:role/deploy", ProviderVersion: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token, err := c.authToken(context.Background()); err != nil || token != "assumed.header.signature" {
-		t.Fatalf("unexpected assumed-role token=%q err=%v", token, err)
+	if err := client.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, ""); err == nil {
+		t.Fatal("expected web identity redirect response to be rejected")
+	}
+	if redirectedRequests.Load() != 0 {
+		t.Fatal("web identity assertion was replayed to a redirect target")
 	}
 }
 
 func TestCredentialConfigurationRejectsPartialOrAmbiguousValues(t *testing.T) {
 	t.Parallel()
+	token := testSessionToken(t, time.Now().Add(time.Hour), "session-validation")
 	for name, config := range map[string]Config{
-		"missing":   {BaseURL: "https://example.test"},
-		"partial":   {BaseURL: "https://example.test", AccessKeyID: "VAPPAKFIXTURE"},
-		"ambiguous": {BaseURL: "https://example.test", Token: "token", AccessKeyID: "id", SecretAccessKey: "secret"},
+		"missing":           {BaseURL: "https://example.test"},
+		"partial-static":    {BaseURL: "https://example.test", AccessKeyID: "VAPPASIAFIXTURE"},
+		"missing-role":      {BaseURL: "https://example.test", WebIdentityTokenFile: "/tmp/oidc"},
+		"ambiguous":         {BaseURL: "https://example.test", AccessKeyID: "id", SecretAccessKey: "secret", SessionToken: token, CredentialProcess: "vappctl credential-process"},
+		"non-session-token": {BaseURL: "https://example.test", AccessKeyID: "id", SecretAccessKey: "secret", SessionToken: "opaque-token"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewWithConfig(config); err == nil {
@@ -256,11 +432,8 @@ func TestTranscodedGRPCErrorPreservesStatusAndMessage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := New(server.URL, "opaque-token", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = c.Do(context.Background(), http.MethodGet, "/v1/vmms/vmm-1/sessions", nil, nil, "")
+	c := newTestClient(t, server.URL)
+	err := c.Do(context.Background(), http.MethodGet, "/v1/vmms/vmm-1/sessions", nil, nil, "")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected APIError, got %v", err)
@@ -272,70 +445,23 @@ func TestTranscodedGRPCErrorPreservesStatusAndMessage(t *testing.T) {
 	}
 }
 
-func TestOnlyExplicitServiceTokensAreExchanged(t *testing.T) {
+func TestRejectedTemporaryCredentialsAreRedacted(t *testing.T) {
 	t.Parallel()
-	var exchanges atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/token" {
-			exchanges.Add(1)
-			t.Error("ordinary bearer token was sent to the service-token exchange")
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer opaque-token" {
-			t.Errorf("unexpected authorization header %q", got)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	const reflectedSecret = "fixture-temporary-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(APIError{
+			Code: "UNAUTHENTICATED", Message: "rejected " + reflectedSecret,
+		})
 	}))
 	defer server.Close()
-
-	c, err := New(server.URL, "opaque-token", "test")
-	if err != nil {
-		t.Fatal(err)
+	c := newTestClient(t, server.URL)
+	err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
+	if err == nil || !strings.Contains(err.Error(), "Access Portal or vappctl") {
+		t.Fatalf("expected renewal diagnostic, got %v", err)
 	}
-	if err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, ""); err != nil {
-		t.Fatal(err)
-	}
-	if exchanges.Load() != 0 {
-		t.Fatalf("expected no exchanges, got %d", exchanges.Load())
-	}
-}
-
-func TestServiceTokenReauthenticatesOnceAfterLateUnauthorized(t *testing.T) {
-	t.Parallel()
-	var exchanges atomic.Int32
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/token" {
-			n := exchanges.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "jwt-" + strconv.FormatInt(int64(n), 10),
-				"expires_in":   300,
-			})
-			return
-		}
-		switch requests.Add(1) {
-		case 1:
-			w.WriteHeader(http.StatusServiceUnavailable)
-		case 2:
-			w.WriteHeader(http.StatusUnauthorized)
-		default:
-			if got := r.Header.Get("Authorization"); got != "Bearer jwt-2" {
-				t.Errorf("request did not use refreshed token: %q", got)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-		}
-	}))
-	defer server.Close()
-
-	c, err := New(server.URL, "vappsvc_expired", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.sleep = func(context.Context, time.Duration) error { return nil }
-	if err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, ""); err != nil {
-		t.Fatal(err)
-	}
-	if exchanges.Load() != 2 {
-		t.Fatalf("expected one initial exchange and one reauthentication, got %d", exchanges.Load())
+	if strings.Contains(err.Error(), reflectedSecret) {
+		t.Fatalf("temporary secret leaked in diagnostic: %v", err)
 	}
 }
 
@@ -351,7 +477,7 @@ func TestServerCannotOverrideRetryClassification(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, _ := New(server.URL, "opaque-token", "test")
+	c := newTestClient(t, server.URL)
 	c.sleep = func(context.Context, time.Duration) error { return nil }
 	err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
 	if err == nil {
@@ -369,7 +495,7 @@ func TestConcurrentRetries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, _ := New(server.URL, "opaque-token", "test")
+	c := newTestClient(t, server.URL)
 	c.sleep = func(context.Context, time.Duration) error { return nil }
 	var group sync.WaitGroup
 	for range 32 {
@@ -425,7 +551,7 @@ func TestBoundedRetryUsesIdempotencyKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, _ := New(server.URL, "header.payload.signature", "test")
+	c := newTestClient(t, server.URL)
 	c.sleep = func(context.Context, time.Duration) error { return nil }
 	var out map[string]string
 	if err := c.Do(context.Background(), http.MethodPost, "/v1/vmms", map[string]string{"name": "worker"}, &out, "stable-key"); err != nil {
@@ -445,7 +571,7 @@ func TestResponseLossReplaysSameMutation(t *testing.T) {
 	}
 	var attempts atomic.Int32
 	var commits atomic.Int32
-	c, _ := New("http://127.0.0.1", "opaque-token", "test")
+	c := newTestClient(t, "http://127.0.0.1")
 	c.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		n := attempts.Add(1)
 		if req.Header.Get("Idempotency-Key") != key {
@@ -494,16 +620,12 @@ func TestConfiguredUserAgentAndEndpointOverride(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
 	}))
 	defer override.Close()
-	c, err := NewWithConfig(Config{
-		BaseURL:          "http://127.0.0.1",
-		Token:            "opaque-token",
-		ProviderVersion:  "1.2.3",
-		TerraformVersion: "1.15.8",
-		AppendUserAgent:  "company-module/4.0",
-		EndpointOverrides: map[string]string{
-			"vmms": override.URL,
-		},
-	})
+	config := testConfig(t, "http://127.0.0.1")
+	config.ProviderVersion = "1.2.3"
+	config.TerraformVersion = "1.15.8"
+	config.AppendUserAgent = "company-module/4.0"
+	config.EndpointOverrides = map[string]string{"vmms": override.URL}
+	c, err := NewWithConfig(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,9 +647,9 @@ func TestConfiguredZeroRetriesMakesOneAttempt(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(APIError{Code: "UNAVAILABLE", Message: "retry"})
 	}))
 	defer server.Close()
-	c, err := NewWithConfig(Config{
-		BaseURL: server.URL, Token: "opaque-token", ProviderVersion: "test", MaxRetries: 0,
-	})
+	config := testConfig(t, server.URL)
+	config.MaxRetries = 0
+	c, err := NewWithConfig(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +674,7 @@ func TestWaitOperationRecovery(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, _ := New(server.URL, "header.payload.signature", "test")
+	c := newTestClient(t, server.URL)
 	c.sleep = func(context.Context, time.Duration) error { return nil }
 	op, err := c.WaitOperation(context.Background(), "op-1", time.Second)
 	if err != nil {
@@ -584,7 +706,7 @@ func TestListAllFollowsPageToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, _ := New(server.URL, "header.payload.signature", "test")
+	c := newTestClient(t, server.URL)
 	items, err := ListAll[NamedItem](context.Background(), c, "/v1/items?project_id=prj-1")
 	if err != nil {
 		t.Fatal(err)
