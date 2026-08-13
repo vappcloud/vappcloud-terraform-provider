@@ -14,7 +14,7 @@ A marketplace or GitHub application deployed explicitly to one or more VMMs.
 
 ```terraform
 resource "vappcloud_application_instance" "nginx" {
-  project_id  = vappcloud_project.example.id
+  account_id  = vappcloud_account.example.id
   name        = "nginx"
   description = "Example marketplace deployment"
 
@@ -40,7 +40,7 @@ resource "vappcloud_application_instance" "nginx" {
 
 - `name` (String) Application instance name.
 - `placement` (Attributes List) (see [below for nested schema](#nestedatt--placement))
-- `project_id` (String) Owning project ID.
+- `account_id` (String) Owning account ID.
 - `source` (Attributes) Exactly one marketplace or GitHub source. Source changes replace the deployment. (see [below for nested schema](#nestedatt--source))
 
 ### Optional
@@ -103,5 +103,5 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import vappcloud_application_instance.nginx project_example/application_instance_example
+terraform import vappcloud_application_instance.nginx account_example/application_instance_example
 ```

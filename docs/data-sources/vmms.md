@@ -3,18 +3,18 @@
 page_title: "vappcloud_vmms Data Source - VAppCloud"
 subcategory: "Data Sources"
 description: |-
-  Lists all VMMs in a project, including system-managed defaults.
+  Lists all VMMs in a account, including system-managed defaults.
 ---
 
 # vappcloud_vmms (Data Source)
 
-Lists all VMMs in a project, including system-managed defaults.
+Lists all VMMs in a account, including system-managed defaults.
 
 ## Example Usage
 
 ```terraform
 data "vappcloud_vmms" "all" {
-  project_id = "project_example"
+  account_id = "account_example"
 }
 ```
 
@@ -23,7 +23,7 @@ data "vappcloud_vmms" "all" {
 
 ### Required
 
-- `project_id` (String)
+- `account_id` (String)
 
 ### Read-Only
 
@@ -40,5 +40,5 @@ Read-Only:
 - `is_default` (Boolean)
 - `management` (String)
 - `name` (String)
-- `project_id` (String)
+- `account_id` (String)
 - `state` (String)

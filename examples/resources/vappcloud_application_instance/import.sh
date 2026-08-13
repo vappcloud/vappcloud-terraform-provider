@@ -1,1 +1,1 @@
-terraform import vappcloud_application_instance.nginx project_example/application_instance_example
+terraform import vappcloud_application_instance.nginx account_example/application_instance_example

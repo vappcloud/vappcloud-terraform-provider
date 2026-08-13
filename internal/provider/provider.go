@@ -180,7 +180,7 @@ func (p *vappcloudProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 			"endpoint_overrides": providerschema.MapAttribute{
 				Optional:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "Optional service-specific base URLs keyed by the first API path segment (for example `projects` or `vmms`). Intended for testing and staged rollouts.",
+				MarkdownDescription: "Optional service-specific base URLs keyed by the first API path segment (for example `accounts` or `vmms`). Intended for testing and staged rollouts.",
 			},
 			"max_retries": providerschema.Int64Attribute{
 				Optional:            true,
@@ -316,7 +316,7 @@ func configuredDuration(value types.String, fallback time.Duration, name string,
 
 func (p *vappcloudProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewProjectResource,
+		NewAccountResource,
 		NewDeviceResource,
 		NewComputeInstanceResource,
 		NewVMMResource,
@@ -330,8 +330,8 @@ func (p *vappcloudProvider) Resources(_ context.Context) []func() resource.Resou
 
 func (p *vappcloudProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewProjectsDataSource,
-		NewProjectDataSource,
+		NewAccountsDataSource,
+		NewAccountDataSource,
 		NewDevicesDataSource,
 		NewDeviceDataSource,
 		NewComputeInstancesDataSource,

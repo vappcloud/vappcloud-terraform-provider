@@ -26,7 +26,7 @@ type operationDataModel struct {
 
 type deviceDetailModel struct {
 	ID              types.String `tfsdk:"id"`
-	ProjectID       types.String `tfsdk:"project_id"`
+	AccountID       types.String `tfsdk:"account_id"`
 	Name            types.String `tfsdk:"name"`
 	State           types.String `tfsdk:"state"`
 	DefaultVMMID    types.String `tfsdk:"default_vmm_id"`
@@ -37,7 +37,7 @@ type deviceDetailModel struct {
 
 type computeDetailModel struct {
 	ID                types.String `tfsdk:"id"`
-	ProjectID         types.String `tfsdk:"project_id"`
+	AccountID         types.String `tfsdk:"account_id"`
 	DeviceID          types.String `tfsdk:"device_id"`
 	DefaultVMMID      types.String `tfsdk:"default_vmm_id"`
 	CloudConnectionID types.String `tfsdk:"cloud_connection_id"`
@@ -53,7 +53,7 @@ type computeDetailModel struct {
 
 type vmmDetailModel struct {
 	ID                 types.String `tfsdk:"id"`
-	ProjectID          types.String `tfsdk:"project_id"`
+	AccountID          types.String `tfsdk:"account_id"`
 	DeviceID           types.String `tfsdk:"device_id"`
 	Name               types.String `tfsdk:"name"`
 	CPUCores           types.Int64  `tfsdk:"cpu_cores"`
@@ -77,7 +77,7 @@ type vmmDetailModel struct {
 
 type applicationDetailModel struct {
 	ID              types.String `tfsdk:"id"`
-	ProjectID       types.String `tfsdk:"project_id"`
+	AccountID       types.String `tfsdk:"account_id"`
 	Name            types.String `tfsdk:"name"`
 	Description     types.String `tfsdk:"description"`
 	Source          types.Object `tfsdk:"source"`
@@ -111,7 +111,7 @@ func (d *deviceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 		MarkdownDescription: "Reads a logical device by opaque public ID.",
 		Attributes: map[string]schema.Attribute{
 			"id":               schema.StringAttribute{Required: true},
-			"project_id":       detailString("Owning project ID."),
+			"account_id":       detailString("Owning account ID."),
 			"name":             detailString("Device name."),
 			"state":            detailString("Enrollment and connection state."),
 			"default_vmm_id":   detailString("System-managed default VMM ID."),
@@ -134,7 +134,7 @@ func (d *deviceDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 	state.ID = types.StringValue(device.ID)
-	state.ProjectID = types.StringValue(device.ProjectID)
+	state.AccountID = types.StringValue(device.AccountID)
 	state.Name = types.StringValue(device.Name)
 	state.State = types.StringValue(device.State)
 	state.DefaultVMMID = stringOrNull(device.DefaultVMMID)
@@ -153,7 +153,7 @@ func (d *computeInstanceDataSource) Schema(_ context.Context, _ datasource.Schem
 		MarkdownDescription: "Reads a cloud compute instance by opaque public ID.",
 		Attributes: map[string]schema.Attribute{
 			"id":                  schema.StringAttribute{Required: true},
-			"project_id":          detailString("Owning project ID."),
+			"account_id":          detailString("Owning account ID."),
 			"device_id":           detailString("Attached device ID."),
 			"default_vmm_id":      detailString("Default VMM ID."),
 			"cloud_connection_id": detailString("Cloud connection ID."),
@@ -181,7 +181,7 @@ func (d *computeInstanceDataSource) Read(ctx context.Context, req datasource.Rea
 		return
 	}
 	state.ID = types.StringValue(compute.ID)
-	state.ProjectID = types.StringValue(compute.ProjectID)
+	state.AccountID = types.StringValue(compute.AccountID)
 	state.DeviceID = types.StringValue(compute.DeviceID)
 	state.DefaultVMMID = stringOrNull(compute.DefaultVMMID)
 	state.CloudConnectionID = types.StringValue(compute.CloudConnection)
@@ -205,7 +205,7 @@ func (d *vmmDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, re
 		MarkdownDescription: "Reads a VMM by opaque public ID, including system-managed default VMMs.",
 		Attributes: map[string]schema.Attribute{
 			"id":                  schema.StringAttribute{Required: true},
-			"project_id":          detailString("Owning project ID."),
+			"account_id":          detailString("Owning account ID."),
 			"device_id":           detailString("Host device ID."),
 			"name":                detailString("VMM name."),
 			"cpu_cores":           schema.Int64Attribute{Computed: true},
@@ -241,7 +241,7 @@ func (d *vmmDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 		return
 	}
 	state.ID = types.StringValue(vmm.ID)
-	state.ProjectID = types.StringValue(vmm.ProjectID)
+	state.AccountID = types.StringValue(vmm.AccountID)
 	state.DeviceID = types.StringValue(vmm.DeviceID)
 	state.Name = types.StringValue(vmm.Name)
 	state.CPUCores = types.Int64Value(vmm.CPUCores)
@@ -273,7 +273,7 @@ func (d *applicationInstanceDataSource) Schema(_ context.Context, _ datasource.S
 		MarkdownDescription: "Reads an application instance by opaque public ID.",
 		Attributes: map[string]schema.Attribute{
 			"id":          schema.StringAttribute{Required: true},
-			"project_id":  detailString("Owning project ID."),
+			"account_id":  detailString("Owning account ID."),
 			"name":        detailString("Application instance name."),
 			"description": detailString("Application description."),
 			"source": schema.SingleNestedAttribute{Computed: true, Attributes: map[string]schema.Attribute{
@@ -312,7 +312,7 @@ func (d *applicationInstanceDataSource) Read(ctx context.Context, req datasource
 	var converted applicationInstanceResourceModel
 	applicationToState(application, &converted, &resp.Diagnostics)
 	state.ID = converted.ID
-	state.ProjectID = converted.ProjectID
+	state.AccountID = converted.AccountID
 	state.Name = converted.Name
 	state.Description = converted.Description
 	state.Source = converted.Source

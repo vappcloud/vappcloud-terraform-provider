@@ -3,18 +3,18 @@
 page_title: "vappcloud_application_instances Data Source - VAppCloud"
 subcategory: "Data Sources"
 description: |-
-  Lists application instances in a project.
+  Lists application instances in a account.
 ---
 
 # vappcloud_application_instances (Data Source)
 
-Lists application instances in a project.
+Lists application instances in a account.
 
 ## Example Usage
 
 ```terraform
 data "vappcloud_application_instances" "all" {
-  project_id = "project_example"
+  account_id = "account_example"
 }
 ```
 
@@ -23,7 +23,7 @@ data "vappcloud_application_instances" "all" {
 
 ### Required
 
-- `project_id` (String)
+- `account_id` (String)
 
 ### Read-Only
 
@@ -40,5 +40,5 @@ Read-Only:
 - `is_default` (Boolean)
 - `management` (String)
 - `name` (String)
-- `project_id` (String)
+- `account_id` (String)
 - `state` (String)

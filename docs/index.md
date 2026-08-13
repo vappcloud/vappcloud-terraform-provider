@@ -34,7 +34,7 @@ provider "vappcloud" {}
 - `api_url` (String) VAppCloud API base URL. Defaults to `VAPPCLOUD_API_URL`, then `https://api.4lock.net`.
 - `ca_certificate` (String) Custom CA certificate PEM or path to a PEM file.
 - `credential_process` (String, Sensitive) Command that returns AWS credential_process version 1 JSON. Defaults to `VAPPCLOUD_CREDENTIAL_PROCESS`.
-- `endpoint_overrides` (Map of String) Optional service-specific base URLs keyed by the first API path segment (for example `projects` or `vmms`). Intended for testing and staged rollouts.
+- `endpoint_overrides` (Map of String) Optional service-specific base URLs keyed by the first API path segment (for example `accounts` or `vmms`). Intended for testing and staged rollouts.
 - `insecure_skip_verify` (Boolean) Disable TLS certificate verification. Use only with controlled development endpoints.
 - `max_retries` (Number) Maximum retry count for retryable API failures. Defaults to 5.
 - `proxy_url` (String) Optional HTTP(S) proxy URL. The standard proxy environment variables remain supported when this is unset.

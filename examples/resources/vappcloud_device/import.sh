@@ -1,1 +1,1 @@
-terraform import vappcloud_device.worker project_example/device_example
+terraform import vappcloud_device.worker account_example/device_example

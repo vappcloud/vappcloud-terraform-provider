@@ -21,7 +21,7 @@ For interactive automation, let `vappctl` obtain and renew those credentials:
 
 ```hcl
 provider "vappcloud" {
-  credential_process = "vappctl access credential-process --account-id acc_example --role-arn arn:vapp:iam::123:role/ProjectEditor"
+  credential_process = "vappctl access credential-process --account-id acc_example --role-arn arn:vapp:iam::123:role/AccountEditor"
 }
 ```
 

@@ -1,6 +1,6 @@
 # VAppCloud Terraform/OpenTofu Provider
 
-Production provider for managing VAppCloud projects, devices, compute instances,
+Production provider for managing VAppCloud accounts, devices, compute instances,
 secondary VMMs, and application instances.
 
 The provider address is `vappcloud/vappcloud`. It supports Terraform 1.5+ and
@@ -56,13 +56,13 @@ the exact snapshot package used by the Registry release workflow. See
 `CONTRIBUTING.md` for the complete gate.
 
 Credentialed development acceptance is opt-in and only manages the explicitly
-configured QA project and device:
+configured QA account and device:
 
 ```text
 VAPPCLOUD_API_URL
 VAPPCLOUD_WEB_IDENTITY_TOKEN_FILE
 VAPPCLOUD_ROLE_ARN
-VAPPCLOUD_REAL_PROJECT_ID
+VAPPCLOUD_REAL_ACCOUNT_ID
 VAPPCLOUD_REAL_DEVICE_ID
 ```
 

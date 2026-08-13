@@ -20,7 +20,7 @@ type deviceResource struct{ resourceBase }
 
 type deviceResourceModel struct {
 	ID              types.String      `tfsdk:"id"`
-	ProjectID       types.String      `tfsdk:"project_id"`
+	AccountID       types.String      `tfsdk:"account_id"`
 	Name            types.String      `tfsdk:"name"`
 	State           types.String      `tfsdk:"state"`
 	DefaultVMMID    types.String      `tfsdk:"default_vmm_id"`
@@ -41,7 +41,7 @@ func (r *deviceResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 		Version:             0,
 		MarkdownDescription: "A logical VAppCloud device created in pending enrollment state. Compute may later attach to it.",
 		Attributes: withCommon(map[string]schema.Attribute{
-			"project_id":     immutableString("Owning project ID."),
+			"account_id":     immutableString("Owning account ID."),
 			"name":           schema.StringAttribute{Required: true, MarkdownDescription: "Device name."},
 			"state":          computedString("Enrollment and connection state."),
 			"default_vmm_id": computedString("System-managed default VMM ID, populated after the agent becomes healthy."),
@@ -65,7 +65,7 @@ func (r *deviceResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	payload := map[string]any{
-		"project_id": plan.ProjectID.ValueString(),
+		"account_id": plan.AccountID.ValueString(),
 		"name":       plan.Name.ValueString(),
 	}
 	key := createMutationKey(&resp.Diagnostics, "vappcloud_device.create")
@@ -87,7 +87,7 @@ func (r *deviceResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 	deviceToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *deviceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -96,14 +96,14 @@ func (r *deviceResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 	var device client.Device
 	if !readResource(ctx, r.client, "/v1/devices/"+client.Escape(state.ID.ValueString()), &device, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	deviceToState(device, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *deviceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -146,7 +146,7 @@ func (r *deviceResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 	deviceToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *deviceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -191,7 +191,7 @@ func (r *deviceResource) ImportState(ctx context.Context, req resource.ImportSta
 		importCompositeIdentity(ctx, req, resp)
 		return
 	}
-	projectID, deviceID, ok := compositeImportID(req.ID, "device", &resp.Diagnostics)
+	accountID, deviceID, ok := compositeImportID(req.ID, "device", &resp.Diagnostics)
 	if !ok {
 		return
 	}
@@ -200,20 +200,20 @@ func (r *deviceResource) ImportState(ctx context.Context, req resource.ImportSta
 		resp.Diagnostics.AddError("Unable to import device", err.Error())
 		return
 	}
-	if device.ProjectID != projectID {
+	if device.AccountID != accountID {
 		resp.Diagnostics.AddError(
-			"Device project mismatch",
-			fmt.Sprintf("Device %s belongs to project %s, not %s.", deviceID, device.ProjectID, projectID),
+			"Device account mismatch",
+			fmt.Sprintf("Device %s belongs to account %s, not %s.", deviceID, device.AccountID, accountID),
 		)
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), deviceID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), projectID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("account_id"), accountID)...)
 }
 
 func deviceToState(device client.Device, state *deviceResourceModel) {
 	state.ID = types.StringValue(device.ID)
-	state.ProjectID = types.StringValue(device.ProjectID)
+	state.AccountID = types.StringValue(device.AccountID)
 	state.Name = types.StringValue(device.Name)
 	state.State = types.StringValue(device.State)
 	if device.DefaultVMMID == "" {

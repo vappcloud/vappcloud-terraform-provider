@@ -68,7 +68,7 @@ func targetForID(id string) (sweepTarget, error) {
 	}
 	switch {
 	case strings.HasPrefix(id, "acc_"):
-		path := "/v1/projects/" + escaped
+		path := "/v1/accounts/" + escaped
 		return sweepTarget{id: id, readPath: path, delete: versionedDelete(path)}, nil
 	case strings.HasPrefix(id, "dev_"):
 		path := "/v1/devices/" + escaped

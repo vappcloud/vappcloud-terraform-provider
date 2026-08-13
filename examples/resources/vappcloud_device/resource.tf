@@ -1,4 +1,4 @@
 resource "vappcloud_device" "worker" {
-  project_id = vappcloud_project.production.id
+  account_id = vappcloud_account.production.id
   name       = "worker-01"
 }

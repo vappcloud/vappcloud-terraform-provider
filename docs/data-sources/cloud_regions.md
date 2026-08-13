@@ -26,7 +26,7 @@ data "vappcloud_cloud_regions" "all" {
 - `application_id` (String)
 - `cloud_connection_id` (String)
 - `github_connection_id` (String)
-- `project_id` (String)
+- `account_id` (String)
 - `region` (String)
 
 ### Read-Only

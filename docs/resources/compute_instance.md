@@ -14,7 +14,7 @@ A cloud compute instance attached to a pre-created VAppCloud device. Enrollment 
 
 ```terraform
 resource "vappcloud_compute_instance" "worker" {
-  project_id          = vappcloud_project.production.id
+  account_id          = vappcloud_account.production.id
   device_id           = vappcloud_device.worker.id
   cloud_connection_id = "cloud_connection_example"
   region              = "us-east-1"
@@ -39,7 +39,7 @@ resource "vappcloud_compute_instance" "worker" {
 - `device_id` (String) Pre-created logical device ID.
 - `image` (String) Cloud image slug or ID.
 - `name` (String) Compute instance name.
-- `project_id` (String) Owning project ID.
+- `account_id` (String) Owning account ID.
 - `region` (String) Cloud region slug.
 - `size` (String) Cloud size slug.
 
@@ -72,5 +72,5 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import vappcloud_compute_instance.worker project_example/compute_example
+terraform import vappcloud_compute_instance.worker account_example/compute_example
 ```

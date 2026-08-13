@@ -3,18 +3,18 @@
 page_title: "vappcloud_devices Data Source - VAppCloud"
 subcategory: "Data Sources"
 description: |-
-  Lists devices in a project.
+  Lists devices in a account.
 ---
 
 # vappcloud_devices (Data Source)
 
-Lists devices in a project.
+Lists devices in a account.
 
 ## Example Usage
 
 ```terraform
 data "vappcloud_devices" "all" {
-  project_id = "project_example"
+  account_id = "account_example"
 }
 ```
 
@@ -23,7 +23,7 @@ data "vappcloud_devices" "all" {
 
 ### Required
 
-- `project_id` (String)
+- `account_id` (String)
 
 ### Read-Only
 
@@ -40,5 +40,5 @@ Read-Only:
 - `is_default` (Boolean)
 - `management` (String)
 - `name` (String)
-- `project_id` (String)
+- `account_id` (String)
 - `state` (String)

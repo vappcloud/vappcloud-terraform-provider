@@ -14,7 +14,7 @@ Reads VAppCloud catalog entries from `/v1/github/connections`.
 
 ```terraform
 data "vappcloud_github_connections" "all" {
-  project_id = "project_example"
+  account_id = "account_example"
 }
 ```
 
@@ -26,7 +26,7 @@ data "vappcloud_github_connections" "all" {
 - `application_id` (String)
 - `cloud_connection_id` (String)
 - `github_connection_id` (String)
-- `project_id` (String)
+- `account_id` (String)
 - `region` (String)
 
 ### Read-Only

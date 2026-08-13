@@ -1,5 +1,5 @@
 resource "vappcloud_compute_instance" "worker" {
-  project_id          = vappcloud_project.production.id
+  account_id          = vappcloud_account.production.id
   device_id           = vappcloud_device.worker.id
   cloud_connection_id = "cloud_connection_example"
   region              = "us-east-1"

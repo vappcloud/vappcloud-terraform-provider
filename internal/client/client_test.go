@@ -92,11 +92,11 @@ func TestCredentialProcessUsesDirectTemporaryCredentials(t *testing.T) {
 
 func TestCredentialProcessParserDoesNotInvokeShellSyntax(t *testing.T) {
 	t.Parallel()
-	arguments, err := splitCredentialProcess(`vappctl access credential-process --account-id acc_example --role-arn "arn:vapp:iam::1:role/Project Editor";echo`)
+	arguments, err := splitCredentialProcess(`vappctl access credential-process --account-id acc_example --role-arn "arn:vapp:iam::1:role/Account Editor";echo`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"vappctl", "access", "credential-process", "--account-id", "acc_example", "--role-arn", "arn:vapp:iam::1:role/Project Editor;echo"}
+	want := []string{"vappctl", "access", "credential-process", "--account-id", "acc_example", "--role-arn", "arn:vapp:iam::1:role/Account Editor;echo"}
 	if len(arguments) != len(want) {
 		t.Fatalf("unexpected arguments: %#v", arguments)
 	}
@@ -134,7 +134,7 @@ func TestCredentialProcessParserDoesNotInvokeShellSyntax(t *testing.T) {
 func TestMutationRequiresIdempotencyKey(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, "https://example.test")
-	err := c.Do(context.Background(), http.MethodPost, "/v1/projects", map[string]string{"name": "x"}, nil, "")
+	err := c.Do(context.Background(), http.MethodPost, "/v1/accounts", map[string]string{"name": "x"}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "idempotency") {
 		t.Fatalf("expected idempotency error, got %v", err)
 	}
@@ -143,14 +143,14 @@ func TestMutationRequiresIdempotencyKey(t *testing.T) {
 func TestProtobufJSONInt64Scalars(t *testing.T) {
 	t.Parallel()
 	var vmm VMM
-	fixture := `{"id":"vmm-1","projectId":"prj-1","deviceId":"dev-1","cpuCores":4,"memoryMb":2048,"diskMb":10240,` +
+	fixture := `{"id":"vmm-1","accountId":"prj-1","deviceId":"dev-1","cpuCores":4,"memoryMb":2048,"diskMb":10240,` +
 		`"desiredRevision":"3","observedRevision":"2","resourceVersion":"7",` +
 		`"instanceProfileArn":"arn:vapp:iam::3:instance-profile/qa","instanceRoleArn":"arn:vapp:iam::3:role/qa"}`
 	if err := json.Unmarshal([]byte(fixture), &vmm); err != nil {
 		t.Fatal(err)
 	}
 	if vmm.ResourceVersion != 7 || vmm.DesiredRevision != 3 || vmm.CPUCores != 4 ||
-		vmm.ProjectID != "prj-1" || vmm.DeviceID != "dev-1" ||
+		vmm.AccountID != "prj-1" || vmm.DeviceID != "dev-1" ||
 		vmm.InstanceProfileARN != "arn:vapp:iam::3:instance-profile/qa" ||
 		vmm.InstanceRoleARN != "arn:vapp:iam::3:role/qa" {
 		t.Fatalf("unexpected decoded VMM: %+v", vmm)
@@ -229,7 +229,7 @@ func TestSigV4SignsEveryRequestWithTemporaryCredentials(t *testing.T) {
 	defer server.Close()
 
 	c := newTestClient(t, server.URL)
-	if err := c.Do(context.Background(), http.MethodPost, "/v1/projects?b=2&a=1", map[string]string{"name": "signed"}, nil, "stable-key"); err != nil {
+	if err := c.Do(context.Background(), http.MethodPost, "/v1/accounts?b=2&a=1", map[string]string{"name": "signed"}, nil, "stable-key"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(firstAuthorization, "/global/vappcloud/aws4_request") {
@@ -246,7 +246,7 @@ func TestSigV4PreservesAlreadyEscapedPathOctets(t *testing.T) {
 	t.Parallel()
 	client := newTestClient(t, "https://api.example.test")
 	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.EscapedPath() != "/v1/projects/a%2Fb" {
+		if request.URL.EscapedPath() != "/v1/accounts/a%2Fb" {
 			t.Fatalf("escaped path changed before signing: %q", request.URL.EscapedPath())
 		}
 		actual := request.Header.Get("Authorization")
@@ -291,7 +291,7 @@ func TestSigV4PreservesAlreadyEscapedPathOctets(t *testing.T) {
 		}, nil
 	})
 	var response map[string]bool
-	if err := client.Do(context.Background(), http.MethodGet, "/v1/projects/a%2Fb?z=last&a=first", nil, &response, ""); err != nil {
+	if err := client.Do(context.Background(), http.MethodGet, "/v1/accounts/a%2Fb?z=last&a=first", nil, &response, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -318,7 +318,7 @@ func TestWebIdentityReReadsTokenAndRefreshesAfterUnauthorized(t *testing.T) {
 				"SecretAccessKey": "temporary-secret", "SessionToken": testSessionToken(t, time.Now().Add(time.Hour), "web-session"),
 				"Expiration": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 			}})
-		case "/v1/projects":
+		case "/v1/accounts":
 			if requests.Add(1) == 1 {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
@@ -337,7 +337,7 @@ func TestWebIdentityReReadsTokenAndRefreshesAfterUnauthorized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, ""); err != nil {
+	if err := c.Do(context.Background(), http.MethodGet, "/v1/accounts", nil, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if exchanges.Load() != 2 || requests.Load() != 2 {
@@ -362,7 +362,7 @@ func TestTemporaryCredentialsAreNeverForwardedAcrossRedirects(t *testing.T) {
 
 	client := newTestClient(t, origin.URL)
 	var response map[string]any
-	if err := client.Do(context.Background(), http.MethodGet, "/v1/projects", nil, &response, ""); err == nil {
+	if err := client.Do(context.Background(), http.MethodGet, "/v1/accounts", nil, &response, ""); err == nil {
 		t.Fatal("expected redirect response to be rejected")
 	}
 	if redirectedRequests.Load() != 0 {
@@ -396,7 +396,7 @@ func TestWebIdentityAssertionIsNeverReplayedAcrossRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, ""); err == nil {
+	if err := client.Do(context.Background(), http.MethodGet, "/v1/accounts", nil, nil, ""); err == nil {
 		t.Fatal("expected web identity redirect response to be rejected")
 	}
 	if redirectedRequests.Load() != 0 {
@@ -456,7 +456,7 @@ func TestRejectedTemporaryCredentialsAreRedacted(t *testing.T) {
 	}))
 	defer server.Close()
 	c := newTestClient(t, server.URL)
-	err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
+	err := c.Do(context.Background(), http.MethodGet, "/v1/accounts", nil, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "Access Portal or vappctl") {
 		t.Fatalf("expected renewal diagnostic, got %v", err)
 	}
@@ -479,7 +479,7 @@ func TestServerCannotOverrideRetryClassification(t *testing.T) {
 
 	c := newTestClient(t, server.URL)
 	c.sleep = func(context.Context, time.Duration) error { return nil }
-	err := c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
+	err := c.Do(context.Background(), http.MethodGet, "/v1/accounts", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected API error")
 	}
@@ -502,7 +502,7 @@ func TestConcurrentRetries(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_ = c.Do(context.Background(), http.MethodGet, "/v1/projects", nil, nil, "")
+			_ = c.Do(context.Background(), http.MethodGet, "/v1/accounts", nil, nil, "")
 		}()
 	}
 	group.Wait()
@@ -653,7 +653,7 @@ func TestConfiguredZeroRetriesMakesOneAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.Do(context.Background(), http.MethodPost, "/v1/projects", map[string]string{"name": "one"}, nil, "key")
+	err = c.Do(context.Background(), http.MethodPost, "/v1/accounts", map[string]string{"name": "one"}, nil, "key")
 	if err == nil {
 		t.Fatal("expected service unavailable error")
 	}
@@ -707,7 +707,7 @@ func TestListAllFollowsPageToken(t *testing.T) {
 	defer server.Close()
 
 	c := newTestClient(t, server.URL)
-	items, err := ListAll[NamedItem](context.Background(), c, "/v1/items?project_id=prj-1")
+	items, err := ListAll[NamedItem](context.Background(), c, "/v1/items?account_id=prj-1")
 	if err != nil {
 		t.Fatal(err)
 	}

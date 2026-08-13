@@ -24,7 +24,7 @@ type vmmResource struct{ resourceBase }
 
 type vmmResourceModel struct {
 	ID                 types.String      `tfsdk:"id"`
-	ProjectID          types.String      `tfsdk:"project_id"`
+	AccountID          types.String      `tfsdk:"account_id"`
 	DeviceID           types.String      `tfsdk:"device_id"`
 	Name               types.String      `tfsdk:"name"`
 	CPUCores           types.Int64       `tfsdk:"cpu_cores"`
@@ -62,7 +62,7 @@ func (r *vmmResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 		MarkdownDescription: "A Terraform-managed secondary VMM. The system-managed default VMM is read-only and " +
 			"is available through VMM data sources; it cannot be created, adopted, imported, or destroyed by this resource.",
 		Attributes: withCommon(map[string]schema.Attribute{
-			"project_id": immutableString("Immutable owning project ID."),
+			"account_id": immutableString("Immutable owning account ID."),
 			"device_id":  immutableString("Immutable host device ID."),
 			"name":       schema.StringAttribute{Required: true, MarkdownDescription: "VMM name."},
 			"cpu_cores": schema.Int64Attribute{
@@ -117,7 +117,7 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	payload := map[string]any{
-		"project_id":          plan.ProjectID.ValueString(),
+		"account_id":          plan.AccountID.ValueString(),
 		"device_id":           plan.DeviceID.ValueString(),
 		"name":                plan.Name.ValueString(),
 		"cpu_cores":           plan.CPUCores.ValueInt64(),
@@ -149,7 +149,7 @@ func (r *vmmResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 	if desiredProfileARN == "" || resp.Diagnostics.HasError() {
 		return
 	}
@@ -170,7 +170,7 @@ func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 	var vmm client.VMM
 	if !readResource(ctx, r.client, "/v1/vmms/"+client.Escape(state.ID.ValueString()), &vmm, &resp.State, &resp.Diagnostics) {
 		return
@@ -181,7 +181,7 @@ func (r *vmmResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	}
 	vmmToState(vmm, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -243,7 +243,7 @@ func (r *vmmResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 	vmmToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *vmmResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -295,7 +295,7 @@ func (r *vmmResource) ImportState(ctx context.Context, req resource.ImportStateR
 	}
 	parts := strings.Split(req.ID, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		resp.Diagnostics.AddError("Invalid VMM import identifier", "Expected <project_id>/<vmm_id>.")
+		resp.Diagnostics.AddError("Invalid VMM import identifier", "Expected <account_id>/<vmm_id>.")
 		return
 	}
 	var vmm client.VMM
@@ -307,17 +307,17 @@ func (r *vmmResource) ImportState(ctx context.Context, req resource.ImportStateR
 		resp.Diagnostics.AddError("Default VMM cannot be imported", "System-managed default VMMs are read-only. Use data.vappcloud_vmm.")
 		return
 	}
-	if vmm.ProjectID != parts[0] {
-		resp.Diagnostics.AddError("VMM project mismatch", fmt.Sprintf("VMM %s belongs to project %s, not %s.", parts[1], vmm.ProjectID, parts[0]))
+	if vmm.AccountID != parts[0] {
+		resp.Diagnostics.AddError("VMM account mismatch", fmt.Sprintf("VMM %s belongs to account %s, not %s.", parts[1], vmm.AccountID, parts[0]))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), parts[0])...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("account_id"), parts[0])...)
 }
 
 func vmmToState(vmm client.VMM, state *vmmResourceModel) {
 	state.ID = types.StringValue(vmm.ID)
-	state.ProjectID = types.StringValue(vmm.ProjectID)
+	state.AccountID = types.StringValue(vmm.AccountID)
 	state.DeviceID = types.StringValue(vmm.DeviceID)
 	state.Name = types.StringValue(vmm.Name)
 	state.CPUCores = types.Int64Value(vmm.CPUCores)

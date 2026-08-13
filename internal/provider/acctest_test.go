@@ -60,14 +60,14 @@ func requireSigV4(w http.ResponseWriter, r *http.Request) bool {
 type acceptanceAPI struct {
 	mu          sync.Mutex
 	vmm         client.VMM
-	projects    map[string]client.Project
+	accounts    map[string]client.Account
 	devices     map[string]client.Device
 	computes    map[string]client.ComputeInstance
 	apps        map[string]client.ApplicationInstance
 	operations  map[string]client.Operation
 	clock       int64
 	conflictVMM bool
-	projectSeq  int64
+	accountSeq  int64
 }
 
 func (a *acceptanceAPI) now() time.Time {
@@ -111,7 +111,7 @@ func succeededOperation(api *acceptanceAPI, kind, resourceID string) client.Oper
 func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 	t.Helper()
 	api := &acceptanceAPI{
-		projects: make(map[string]client.Project), devices: make(map[string]client.Device),
+		accounts: make(map[string]client.Account), devices: make(map[string]client.Device),
 		computes: make(map[string]client.ComputeInstance), apps: make(map[string]client.ApplicationInstance),
 		operations: make(map[string]client.Operation),
 	}
@@ -123,65 +123,65 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			return
 		}
 		switch {
-		case r.URL.Path == "/v1/projects" && r.Method == http.MethodGet:
-			items := make([]client.Project, 0, len(api.projects))
-			for _, project := range api.projects {
-				items = append(items, project)
+		case r.URL.Path == "/v1/accounts" && r.Method == http.MethodGet:
+			items := make([]client.Account, 0, len(api.accounts))
+			for _, account := range api.accounts {
+				items = append(items, account)
 			}
 			if r.URL.Query().Get("page_token") == "" {
-				_ = json.NewEncoder(w).Encode(client.Page[client.Project]{Items: items, NextCursor: "projects-page-2"})
+				_ = json.NewEncoder(w).Encode(client.Page[client.Account]{Items: items, NextCursor: "accounts-page-2"})
 			} else {
-				_ = json.NewEncoder(w).Encode(client.Page[client.Project]{Items: []client.Project{}})
+				_ = json.NewEncoder(w).Encode(client.Page[client.Account]{Items: []client.Account{}})
 			}
-		case r.URL.Path == "/v1/projects" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v1/accounts" && r.Method == http.MethodPost:
 			if !requireIdempotency(w, r) {
 				return
 			}
 			var in map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			now := api.now()
-			api.projectSeq++
+			api.accountSeq++
 			id := "prj-test"
-			if api.projectSeq > 1 {
-				id = fmt.Sprintf("prj-test-%d", api.projectSeq)
+			if api.accountSeq > 1 {
+				id = fmt.Sprintf("prj-test-%d", api.accountSeq)
 			}
-			project := client.Project{ID: id, Name: fmt.Sprint(in["name"]), Description: fmt.Sprint(in["description"]), ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
-			api.projects[project.ID] = project
-			_ = json.NewEncoder(w).Encode(client.Mutation[client.Project]{Resource: project})
-		case strings.HasPrefix(r.URL.Path, "/v1/projects/"):
-			id := strings.TrimPrefix(r.URL.Path, "/v1/projects/")
-			project, ok := api.projects[id]
+			account := client.Account{ID: id, Name: fmt.Sprint(in["name"]), Description: fmt.Sprint(in["description"]), ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+			api.accounts[account.ID] = account
+			_ = json.NewEncoder(w).Encode(client.Mutation[client.Account]{Resource: account})
+		case strings.HasPrefix(r.URL.Path, "/v1/accounts/"):
+			id := strings.TrimPrefix(r.URL.Path, "/v1/accounts/")
+			account, ok := api.accounts[id]
 			if !ok {
-				http.Error(w, `{"code":"NOT_FOUND","message":"project not found"}`, http.StatusNotFound)
+				http.Error(w, `{"code":"NOT_FOUND","message":"account not found"}`, http.StatusNotFound)
 				return
 			}
 			switch r.Method {
 			case http.MethodGet:
-				_ = json.NewEncoder(w).Encode(project)
+				_ = json.NewEncoder(w).Encode(account)
 			case http.MethodPatch:
 				if !requireIdempotency(w, r) {
 					return
 				}
 				var in map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&in)
-				if !requestVersion(w, in, project.ResourceVersion) {
+				if !requestVersion(w, in, account.ResourceVersion) {
 					return
 				}
-				project.Name = fmt.Sprint(in["name"])
-				project.Description = fmt.Sprint(in["description"])
-				project.ResourceVersion++
-				project.UpdatedAt = api.now()
-				api.projects[id] = project
-				_ = json.NewEncoder(w).Encode(client.Mutation[client.Project]{Resource: project})
+				account.Name = fmt.Sprint(in["name"])
+				account.Description = fmt.Sprint(in["description"])
+				account.ResourceVersion++
+				account.UpdatedAt = api.now()
+				api.accounts[id] = account
+				_ = json.NewEncoder(w).Encode(client.Mutation[client.Account]{Resource: account})
 			case http.MethodDelete:
 				if !requireIdempotency(w, r) {
 					return
 				}
-				if r.URL.Query().Get("resource_version") != strconv.FormatInt(project.ResourceVersion.Int64(), 10) {
+				if r.URL.Query().Get("resource_version") != strconv.FormatInt(account.ResourceVersion.Int64(), 10) {
 					http.Error(w, `{"code":"ABORTED","message":"resource version conflict"}`, http.StatusConflict)
 					return
 				}
-				delete(api.projects, id)
+				delete(api.accounts, id)
 				w.WriteHeader(http.StatusNoContent)
 			}
 		case r.URL.Path == "/v1/devices" && r.Method == http.MethodGet:
@@ -198,7 +198,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			now := api.now()
 			device := client.Device{
-				ID: "dev-test", ProjectID: fmt.Sprint(in["project_id"]), Name: fmt.Sprint(in["name"]),
+				ID: "dev-test", AccountID: fmt.Sprint(in["account_id"]), Name: fmt.Sprint(in["name"]),
 				State: "pending", ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
 			}
 			api.devices[device.ID] = device
@@ -252,7 +252,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			now := api.now()
 			compute := client.ComputeInstance{
-				ID: "compute-test", ProjectID: fmt.Sprint(in["project_id"]), DeviceID: fmt.Sprint(in["device_id"]),
+				ID: "compute-test", AccountID: fmt.Sprint(in["account_id"]), DeviceID: fmt.Sprint(in["device_id"]),
 				CloudConnection: fmt.Sprint(in["cloud_connection_id"]), Region: fmt.Sprint(in["region"]),
 				Size: fmt.Sprint(in["size"]), Image: fmt.Sprint(in["image"]), Name: fmt.Sprint(in["name"]),
 				State: "running", DefaultVMMID: "vmm-default", ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
@@ -298,7 +298,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			}
 		case r.URL.Path == "/v1/vmms" && r.Method == http.MethodGet:
 			items := []client.VMM{{
-				ID: "vmm-default", ProjectID: "prj-test", DeviceID: "dev-test", Name: "default",
+				ID: "vmm-default", AccountID: "prj-test", DeviceID: "dev-test", Name: "default",
 				IsDefault: true, Management: "system", State: "running", ResourceVersion: 1,
 			}}
 			if api.vmm.ID != "" {
@@ -313,7 +313,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			now := api.now()
 			api.vmm = client.VMM{
-				ID: "vmm-secondary", ProjectID: fmt.Sprint(in["project_id"]), DeviceID: fmt.Sprint(in["device_id"]),
+				ID: "vmm-secondary", AccountID: fmt.Sprint(in["account_id"]), DeviceID: fmt.Sprint(in["device_id"]),
 				Name: fmt.Sprint(in["name"]), CPUCores: int64(in["cpu_cores"].(float64)), MemoryMB: int64(in["memory_mb"].(float64)),
 				DiskMB: 10240, State: "running", Health: "healthy", Management: "terraform",
 				DesiredRevision: 1, ObservedRevision: 1, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
@@ -360,7 +360,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 		case strings.HasPrefix(r.URL.Path, "/v1/vmms/"):
 			id := strings.TrimPrefix(r.URL.Path, "/v1/vmms/")
 			if id == "vmm-default" && r.Method == http.MethodGet {
-				_ = json.NewEncoder(w).Encode(client.VMM{ID: id, ProjectID: "prj-test", DeviceID: "dev-test", IsDefault: true, Management: "system", State: "running"})
+				_ = json.NewEncoder(w).Encode(client.VMM{ID: id, AccountID: "prj-test", DeviceID: "dev-test", IsDefault: true, Management: "system", State: "running"})
 				return
 			}
 			if api.vmm.ID == "" || id != api.vmm.ID {
@@ -416,7 +416,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 				return
 			}
 			var in struct {
-				ProjectID   string                   `json:"project_id"`
+				AccountID   string                   `json:"account_id"`
 				Name        string                   `json:"name"`
 				Description string                   `json:"description"`
 				Source      client.ApplicationSource `json:"source"`
@@ -430,7 +430,7 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 				desired += placement.ReplicaCount
 			}
 			app := client.ApplicationInstance{
-				ID: "app-test", ProjectID: in.ProjectID, Name: in.Name, Description: in.Description,
+				ID: "app-test", AccountID: in.AccountID, Name: in.Name, Description: in.Description,
 				Source: in.Source, Placements: in.Placements, SecretIDs: in.SecretIDs,
 				State: "running", ReadyReplicas: desired, DesiredReplicas: desired,
 				ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
@@ -536,8 +536,8 @@ func checkAcceptanceDestroy(api *acceptanceAPI) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		api.mu.Lock()
 		defer api.mu.Unlock()
-		if len(api.projects) != 0 {
-			return fmt.Errorf("%d project resources still exist", len(api.projects))
+		if len(api.accounts) != 0 {
+			return fmt.Errorf("%d account resources still exist", len(api.accounts))
 		}
 		if len(api.devices) != 0 {
 			return fmt.Errorf("%d device resources still exist", len(api.devices))

@@ -20,7 +20,7 @@ type namedListDataSource struct {
 }
 
 type namedListModel struct {
-	ProjectID          types.String `tfsdk:"project_id"`
+	AccountID          types.String `tfsdk:"account_id"`
 	CloudConnectionID  types.String `tfsdk:"cloud_connection_id"`
 	Region             types.String `tfsdk:"region"`
 	ApplicationID      types.String `tfsdk:"application_id"`
@@ -69,7 +69,7 @@ func (d *namedListDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Reads VAppCloud catalog entries from `" + d.endpoint + "`.",
 		Attributes: map[string]schema.Attribute{
-			"project_id":           schema.StringAttribute{Optional: true},
+			"account_id":           schema.StringAttribute{Optional: true},
 			"cloud_connection_id":  schema.StringAttribute{Optional: true},
 			"region":               schema.StringAttribute{Optional: true},
 			"application_id":       schema.StringAttribute{Optional: true},
@@ -96,7 +96,7 @@ func (d *namedListDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 	query := url.Values{}
-	addQuery(query, "project_id", state.ProjectID)
+	addQuery(query, "account_id", state.AccountID)
 	addQuery(query, "cloud_connection_id", state.CloudConnectionID)
 	addQuery(query, "region", state.Region)
 	addQuery(query, "application_id", state.ApplicationID)

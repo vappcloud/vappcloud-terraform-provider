@@ -1,5 +1,5 @@
 resource "vappcloud_application_instance" "nginx" {
-  project_id  = vappcloud_project.example.id
+  account_id  = vappcloud_account.example.id
   name        = "nginx"
   description = "Example marketplace deployment"
 

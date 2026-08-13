@@ -39,7 +39,7 @@ data "vappcloud_vmm" "selected" {
 - `observed_revision` (Number)
 - `operation_id` (String) Latest operation ID.
 - `operation_status` (String) Latest operation state.
-- `project_id` (String) Owning project ID.
+- `account_id` (String) Owning account ID.
 - `resource_version` (Number) Optimistic concurrency version.
 - `retain_disk` (Boolean)
 - `state` (String) Runtime state.

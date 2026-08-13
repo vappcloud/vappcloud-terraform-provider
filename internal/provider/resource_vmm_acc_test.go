@@ -21,7 +21,7 @@ func TestAccVMMResourceCRUDImportAndDrift(t *testing.T) {
 %s
 
 resource "vappcloud_vmm" "test" {
-  project_id          = "prj-test"
+  account_id          = "prj-test"
   device_id           = "dev-test"
   name                = %q
   cpu_cores           = %d
@@ -65,7 +65,7 @@ resource "vappcloud_vmm" "test" {
 				},
 				ConfigStateChecks: identityStateChecks(
 					statecheck.ExpectIdentityValueMatchesState("vappcloud_vmm.test", tfjsonpath.New("id")),
-					statecheck.ExpectIdentityValueMatchesState("vappcloud_vmm.test", tfjsonpath.New("project_id")),
+					statecheck.ExpectIdentityValueMatchesState("vappcloud_vmm.test", tfjsonpath.New("account_id")),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("vappcloud_vmm.test", "cpu_cores", "4"),
@@ -103,7 +103,7 @@ func TestAccVMMInstanceProfileAttachment(t *testing.T) {
 		return fmt.Sprintf(`
 %s
 resource "vappcloud_vmm" "profile" {
-  project_id  = "prj-test"
+  account_id  = "prj-test"
   device_id   = "dev-test"
   name        = "profile-test"
   cpu_cores   = 2
@@ -144,7 +144,7 @@ func TestAccVMMStressTwentyLifecycles(t *testing.T) {
 			config := fmt.Sprintf(`
 %s
 resource "vappcloud_vmm" "stress" {
-  project_id          = "prj-test"
+  account_id          = "prj-test"
   device_id           = "dev-test"
   name                = "stress-%02d"
   cpu_cores           = 2

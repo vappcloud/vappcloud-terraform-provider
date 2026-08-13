@@ -1,1 +1,1 @@
-terraform import vappcloud_compute_instance.worker project_example/compute_example
+terraform import vappcloud_compute_instance.worker account_example/compute_example

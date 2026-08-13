@@ -32,7 +32,7 @@ data "vappcloud_application_instance" "selected" {
 - `operation_id` (String) Latest operation ID.
 - `operation_status` (String) Latest operation state.
 - `placement` (Attributes List) (see [below for nested schema](#nestedatt--placement))
-- `project_id` (String) Owning project ID.
+- `account_id` (String) Owning account ID.
 - `ready_replicas` (Number)
 - `resource_version` (Number) Optimistic concurrency version.
 - `secret_ids` (Set of String)

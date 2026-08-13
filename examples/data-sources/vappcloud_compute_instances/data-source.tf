@@ -1,3 +1,3 @@
 data "vappcloud_compute_instances" "all" {
-  project_id = "project_example"
+  account_id = "account_example"
 }

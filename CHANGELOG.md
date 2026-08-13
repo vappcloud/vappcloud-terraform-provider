@@ -1,6 +1,6 @@
 # Changelog
 
-All notable user-facing changes are documented here. This project follows
+All notable user-facing changes are documented here. This account follows
 [Semantic Versioning](https://semver.org/) and maintains unreleased fragments in
 `.changelog/`.
 
@@ -14,7 +14,7 @@ All notable user-facing changes are documented here. This project follows
 
 ### Added
 
-- First-class Terraform/OpenTofu resources for projects, devices, compute
+- First-class Terraform/OpenTofu resources for accounts, devices, compute
   instances, VMMs, and application instances.
 - Resource identity support for Terraform and OpenTofu 1.12+.
 - Configurable retries, timeouts, rate limiting, proxies, custom CAs, TLS

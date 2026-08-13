@@ -30,7 +30,7 @@ data "vappcloud_compute_instance" "selected" {
 - `id` (String) The ID of this resource.
 - `image` (String) Cloud image.
 - `name` (String) Compute instance name.
-- `project_id` (String) Owning project ID.
+- `account_id` (String) Owning account ID.
 - `region` (String) Cloud region.
 - `resource_version` (Number) Optimistic concurrency version.
 - `size` (String) Cloud size.

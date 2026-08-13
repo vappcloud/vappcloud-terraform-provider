@@ -25,7 +25,7 @@ import (
 
 const (
 	operationTimeout        = 20 * time.Minute
-	projectOperationTimeout = 5 * time.Minute
+	accountOperationTimeout = 5 * time.Minute
 	deviceOperationTimeout  = 10 * time.Minute
 	computeOperationTimeout = 30 * time.Minute
 )
@@ -36,17 +36,17 @@ type resourceBase struct {
 	client *client.Client
 }
 
-func identitySchema(includeProject bool) identityschema.Schema {
+func identitySchema(includeAccount bool) identityschema.Schema {
 	attributes := map[string]identityschema.Attribute{
 		"id": identityschema.StringAttribute{
 			RequiredForImport: true,
 			Description:       "Opaque VAppCloud resource identifier.",
 		},
 	}
-	if includeProject {
-		attributes["project_id"] = identityschema.StringAttribute{
+	if includeAccount {
+		attributes["account_id"] = identityschema.StringAttribute{
 			RequiredForImport: true,
-			Description:       "Owning VAppCloud project identifier.",
+			Description:       "Owning VAppCloud account identifier.",
 		}
 	}
 	return identityschema.Schema{Version: 0, Attributes: attributes}
@@ -56,12 +56,12 @@ func setResourceIdentity(
 	ctx context.Context,
 	identity *tfsdk.ResourceIdentity,
 	id string,
-	projectID string,
+	accountID string,
 	diagnostics *diag.Diagnostics,
 ) {
 	diagnostics.Append(identity.SetAttribute(ctx, path.Root("id"), types.StringValue(id))...)
-	if projectID != "" {
-		diagnostics.Append(identity.SetAttribute(ctx, path.Root("project_id"), types.StringValue(projectID))...)
+	if accountID != "" {
+		diagnostics.Append(identity.SetAttribute(ctx, path.Root("account_id"), types.StringValue(accountID))...)
 	}
 }
 
@@ -71,7 +71,7 @@ func importCompositeIdentity(
 	resp *resource.ImportStateResponse,
 ) {
 	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), req, resp)
-	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("project_id"), path.Root("project_id"), req, resp)
+	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("account_id"), path.Root("account_id"), req, resp)
 }
 
 func compositeImportID(id, resourceName string, diagnostics *diag.Diagnostics) (string, string, bool) {
@@ -79,7 +79,7 @@ func compositeImportID(id, resourceName string, diagnostics *diag.Diagnostics) (
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		diagnostics.AddError(
 			"Invalid "+resourceName+" import identifier",
-			"Expected <project_id>/<resource_id>.",
+			"Expected <account_id>/<resource_id>.",
 		)
 		return "", "", false
 	}

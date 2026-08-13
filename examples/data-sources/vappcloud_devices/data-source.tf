@@ -1,3 +1,3 @@
 data "vappcloud_devices" "all" {
-  project_id = "project_example"
+  account_id = "account_example"
 }

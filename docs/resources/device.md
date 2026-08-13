@@ -14,7 +14,7 @@ A logical VAppCloud device created in pending enrollment state. Compute may late
 
 ```terraform
 resource "vappcloud_device" "worker" {
-  project_id = vappcloud_project.production.id
+  account_id = vappcloud_account.production.id
   name       = "worker-01"
 }
 ```
@@ -25,7 +25,7 @@ resource "vappcloud_device" "worker" {
 ### Required
 
 - `name` (String) Device name.
-- `project_id` (String) Owning project ID.
+- `account_id` (String) Owning account ID.
 
 ### Optional
 
@@ -56,5 +56,5 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import vappcloud_device.worker project_example/device_example
+terraform import vappcloud_device.worker account_example/device_example
 ```

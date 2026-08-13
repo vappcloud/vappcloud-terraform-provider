@@ -14,12 +14,12 @@ A Terraform-managed secondary VMM. The system-managed default VMM is read-only a
 
 ```terraform
 resource "vappcloud_device" "host" {
-  project_id = vappcloud_project.example.id
+  account_id = vappcloud_account.example.id
   name       = "worker-1"
 }
 
 resource "vappcloud_vmm" "secondary" {
-  project_id           = vappcloud_project.example.id
+  account_id           = vappcloud_account.example.id
   device_id            = vappcloud_device.host.id
   name                 = "application-pool"
   cpu_cores            = 4
@@ -39,7 +39,7 @@ resource "vappcloud_vmm" "secondary" {
 - `device_id` (String) Immutable host device ID.
 - `memory_mb` (Number) Desired memory in MiB.
 - `name` (String) VMM name.
-- `project_id` (String) Immutable owning project ID.
+- `account_id` (String) Immutable owning account ID.
 
 ### Optional
 
@@ -82,5 +82,5 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import vappcloud_vmm.secondary project_example/vmm_example
+terraform import vappcloud_vmm.secondary account_example/vmm_example
 ```

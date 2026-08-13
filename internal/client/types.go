@@ -49,7 +49,7 @@ type Mutation[T any] struct {
 }
 
 // UnmarshalJSON accepts both asynchronous lifecycle envelopes and synchronous resource responses. Compute, VMM,
-// and application work returns a durable operation; project and device metadata changes complete synchronously.
+// and application work returns a durable operation; account and device metadata changes complete synchronously.
 func (m *Mutation[T]) UnmarshalJSON(data []byte) error {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(data, &probe); err != nil {
@@ -62,7 +62,7 @@ func (m *Mutation[T]) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*mutationAlias)(m))
 }
 
-type Project struct {
+type Account struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
 	Description     string    `json:"description,omitempty"`
@@ -73,7 +73,7 @@ type Project struct {
 
 type Device struct {
 	ID              string    `json:"id"`
-	ProjectID       string    `json:"projectId"`
+	AccountID       string    `json:"accountId"`
 	Name            string    `json:"name"`
 	State           string    `json:"state"`
 	DefaultVMMID    string    `json:"defaultVmmId,omitempty"`
@@ -84,7 +84,7 @@ type Device struct {
 
 type ComputeInstance struct {
 	ID              string    `json:"id"`
-	ProjectID       string    `json:"projectId"`
+	AccountID       string    `json:"accountId"`
 	DeviceID        string    `json:"deviceId"`
 	DefaultVMMID    string    `json:"defaultVmmId,omitempty"`
 	CloudConnection string    `json:"cloudConnectionId"`
@@ -100,7 +100,7 @@ type ComputeInstance struct {
 
 type VMM struct {
 	ID                 string    `json:"id"`
-	ProjectID          string    `json:"projectId"`
+	AccountID          string    `json:"accountId"`
 	DeviceID           string    `json:"deviceId"`
 	Name               string    `json:"name"`
 	CPUCores           int64     `json:"cpuCores"`
@@ -140,7 +140,7 @@ type ApplicationSource struct {
 
 type ApplicationInstance struct {
 	ID              string            `json:"id"`
-	ProjectID       string            `json:"projectId"`
+	AccountID       string            `json:"accountId"`
 	Name            string            `json:"name"`
 	Description     string            `json:"description,omitempty"`
 	Source          ApplicationSource `json:"source"`

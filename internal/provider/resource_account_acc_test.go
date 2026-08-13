@@ -10,12 +10,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 )
 
-func TestAccProjectResource(t *testing.T) {
+func TestAccAccountResource(t *testing.T) {
 	server, api := newAcceptanceServer(t)
 	defer server.Close()
 	config := fmt.Sprintf(`
 %s
-resource "vappcloud_project" "test" {
+resource "vappcloud_account" "test" {
   name        = "acceptance"
   description = "created by acceptance"
 }`, acceptanceProviderBlock(server.URL))
@@ -29,16 +29,16 @@ resource "vappcloud_project" "test" {
 					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
 				ConfigStateChecks: identityStateChecks(
-					statecheck.ExpectIdentityValueMatchesState("vappcloud_project.test", tfjsonpath.New("id")),
+					statecheck.ExpectIdentityValueMatchesState("vappcloud_account.test", tfjsonpath.New("id")),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("vappcloud_project.test", "id", "prj-test"),
-					resource.TestCheckResourceAttr("vappcloud_project.test", "resource_version", "1"),
+					resource.TestCheckResourceAttr("vappcloud_account.test", "id", "prj-test"),
+					resource.TestCheckResourceAttr("vappcloud_account.test", "resource_version", "1"),
 				),
 			},
 			{Config: config, PlanOnly: true},
 			{
-				ResourceName:      "vappcloud_project.test",
+				ResourceName:      "vappcloud_account.test",
 				ImportState:       true,
 				ImportStateVerify: true,
 			},
@@ -46,12 +46,12 @@ resource "vappcloud_project" "test" {
 	})
 }
 
-func TestAccProjectIdenticalResourcesHaveDistinctIDs(t *testing.T) {
+func TestAccAccountIdenticalResourcesHaveDistinctIDs(t *testing.T) {
 	server, api := newAcceptanceServer(t)
 	defer server.Close()
 	config := fmt.Sprintf(`
 %s
-resource "vappcloud_project" "identical" {
+resource "vappcloud_account" "identical" {
   count       = 2
   name        = "identical"
   description = "same payload"
@@ -62,8 +62,8 @@ resource "vappcloud_project" "identical" {
 		Steps: []resource.TestStep{{
 			Config: config,
 			Check: checkResourceAttributesDiffer(
-				"vappcloud_project.identical.0",
-				"vappcloud_project.identical.1",
+				"vappcloud_account.identical.0",
+				"vappcloud_account.identical.1",
 				"id",
 			),
 		}},

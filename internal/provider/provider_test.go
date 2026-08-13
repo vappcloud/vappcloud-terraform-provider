@@ -79,7 +79,7 @@ func TestProviderContract(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"vappcloud_project", "vappcloud_device", "vappcloud_compute_instance",
+		"vappcloud_account", "vappcloud_device", "vappcloud_compute_instance",
 		"vappcloud_vmm", "vappcloud_application_instance", "vappcloud_iam_policy",
 		"vappcloud_iam_policy_version", "vappcloud_iam_policy_attachment", "vappcloud_iam_group",
 	} {

@@ -20,7 +20,7 @@ type computeInstanceResource struct{ resourceBase }
 
 type computeInstanceResourceModel struct {
 	ID                types.String      `tfsdk:"id"`
-	ProjectID         types.String      `tfsdk:"project_id"`
+	AccountID         types.String      `tfsdk:"account_id"`
 	DeviceID          types.String      `tfsdk:"device_id"`
 	DefaultVMMID      types.String      `tfsdk:"default_vmm_id"`
 	CloudConnectionID types.String      `tfsdk:"cloud_connection_id"`
@@ -46,7 +46,7 @@ func (r *computeInstanceResource) Schema(ctx context.Context, _ resource.SchemaR
 		Version:             0,
 		MarkdownDescription: "A cloud compute instance attached to a pre-created VAppCloud device. Enrollment bootstrap material is injected server-side and never returned to Terraform.",
 		Attributes: withCommon(map[string]schema.Attribute{
-			"project_id":          immutableString("Owning project ID."),
+			"account_id":          immutableString("Owning account ID."),
 			"device_id":           immutableString("Pre-created logical device ID."),
 			"cloud_connection_id": immutableString("Preconfigured cloud connection ID."),
 			"region":              immutableString("Cloud region slug."),
@@ -75,7 +75,7 @@ func (r *computeInstanceResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 	payload := map[string]any{
-		"project_id":          plan.ProjectID.ValueString(),
+		"account_id":          plan.AccountID.ValueString(),
 		"device_id":           plan.DeviceID.ValueString(),
 		"cloud_connection_id": plan.CloudConnectionID.ValueString(),
 		"region":              plan.Region.ValueString(),
@@ -102,7 +102,7 @@ func (r *computeInstanceResource) Create(ctx context.Context, req resource.Creat
 	}
 	computeToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *computeInstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -111,14 +111,14 @@ func (r *computeInstanceResource) Read(ctx context.Context, req resource.ReadReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 	var compute client.ComputeInstance
 	if !readResource(ctx, r.client, "/v1/compute-instances/"+client.Escape(state.ID.ValueString()), &compute, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	computeToState(compute, &state)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *computeInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -161,7 +161,7 @@ func (r *computeInstanceResource) Update(ctx context.Context, req resource.Updat
 	}
 	computeToState(result.Resource, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *computeInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -206,7 +206,7 @@ func (r *computeInstanceResource) ImportState(ctx context.Context, req resource.
 		importCompositeIdentity(ctx, req, resp)
 		return
 	}
-	projectID, computeID, ok := compositeImportID(req.ID, "compute instance", &resp.Diagnostics)
+	accountID, computeID, ok := compositeImportID(req.ID, "compute instance", &resp.Diagnostics)
 	if !ok {
 		return
 	}
@@ -215,20 +215,20 @@ func (r *computeInstanceResource) ImportState(ctx context.Context, req resource.
 		resp.Diagnostics.AddError("Unable to import compute instance", err.Error())
 		return
 	}
-	if compute.ProjectID != projectID {
+	if compute.AccountID != accountID {
 		resp.Diagnostics.AddError(
-			"Compute instance project mismatch",
-			fmt.Sprintf("Compute instance %s belongs to project %s, not %s.", computeID, compute.ProjectID, projectID),
+			"Compute instance account mismatch",
+			fmt.Sprintf("Compute instance %s belongs to account %s, not %s.", computeID, compute.AccountID, accountID),
 		)
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), computeID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), projectID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("account_id"), accountID)...)
 }
 
 func computeToState(compute client.ComputeInstance, state *computeInstanceResourceModel) {
 	state.ID = types.StringValue(compute.ID)
-	state.ProjectID = types.StringValue(compute.ProjectID)
+	state.AccountID = types.StringValue(compute.AccountID)
 	state.DeviceID = types.StringValue(compute.DeviceID)
 	if compute.DefaultVMMID == "" {
 		state.DefaultVMMID = types.StringNull()

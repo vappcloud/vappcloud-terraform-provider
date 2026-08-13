@@ -43,7 +43,7 @@ func realAcceptanceFixtureName(prefix string) string {
 	return fmt.Sprintf("%s-%s-%d", prefix, identity, time.Now().UTC().UnixNano())
 }
 
-func TestAccRealAPIProjectLifecycle(t *testing.T) {
+func TestAccRealAPIAccountLifecycle(t *testing.T) {
 	if os.Getenv("VAPPCLOUD_REAL_ACC") != "1" {
 		t.Skip("set VAPPCLOUD_REAL_ACC=1 to run credentialed real API acceptance")
 	}
@@ -74,15 +74,15 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 	if err := api.Do(context.Background(), http.MethodPost, "/v1/iam/simulate", map[string]any{
 		"principal_id": principalID,
 		"entries": []map[string]any{{
-			"action":       "project:Create",
-			"resource_arn": fmt.Sprintf("arn:vapp:project::%s:project/new", organizationID),
+			"action":       "account:Create",
+			"resource_arn": fmt.Sprintf("arn:vapp:account::%s:account/new", organizationID),
 			"context_json": "{}",
 		}},
-	}, &simulation, "acceptance-simulate-project-create"); err != nil {
-		t.Fatalf("evaluate assumed-role project policy: %v", err)
+	}, &simulation, "acceptance-simulate-account-create"); err != nil {
+		t.Fatalf("evaluate assumed-role account policy: %v", err)
 	}
 	if len(simulation.Decisions) != 1 || !simulation.Decisions[0].Allowed {
-		t.Fatal("the assumed role must allow project:Create through IAM policy evaluation")
+		t.Fatal("the assumed role must allow account:Create through IAM policy evaluation")
 	}
 	vmmID := os.Getenv("VAPPCLOUD_REAL_ACC_VMM_ID")
 	if vmmID == "" {
@@ -137,7 +137,7 @@ func TestAccRealAPIProjectLifecycle(t *testing.T) {
 provider "vappcloud" {
   api_url = %q
 }
-resource "vappcloud_project" "nightly" {
+resource "vappcloud_account" "nightly" {
   name        = %q
   description = "nightly provider lifecycle verification"
 }`, apiURL, name)
@@ -145,13 +145,13 @@ resource "vappcloud_project" "nightly" {
 		ProtoV6ProviderFactories: providerFactories(),
 		CheckDestroy: func(state *terraform.State) error {
 			for _, managed := range state.RootModule().Resources {
-				if managed.Type != "vappcloud_project" || managed.Primary.ID == "" {
+				if managed.Type != "vappcloud_account" || managed.Primary.ID == "" {
 					continue
 				}
-				var project client.Project
-				err := api.Do(context.Background(), http.MethodGet, "/v1/projects/"+client.Escape(managed.Primary.ID), nil, &project, "")
+				var account client.Account
+				err := api.Do(context.Background(), http.MethodGet, "/v1/accounts/"+client.Escape(managed.Primary.ID), nil, &account, "")
 				if err == nil {
-					return fmt.Errorf("project %s still exists", managed.Primary.ID)
+					return fmt.Errorf("account %s still exists", managed.Primary.ID)
 				}
 				if !client.IsNotFound(err) {
 					return err
@@ -162,7 +162,7 @@ resource "vappcloud_project" "nightly" {
 		Steps: []resource.TestStep{
 			{
 				Config: config,
-				Check:  resource.TestCheckResourceAttr("vappcloud_project.nightly", "name", name),
+				Check:  resource.TestCheckResourceAttr("vappcloud_account.nightly", "name", name),
 			},
 			{Config: config, PlanOnly: true},
 		},
@@ -174,10 +174,10 @@ func TestAccRealAPIVMMLifecycle(t *testing.T) {
 		t.Skip("set VAPPCLOUD_REAL_ACC=1 to run credentialed real API acceptance")
 	}
 	apiURL := os.Getenv("VAPPCLOUD_API_URL")
-	projectID := os.Getenv("VAPPCLOUD_REAL_PROJECT_ID")
+	accountID := os.Getenv("VAPPCLOUD_REAL_ACCOUNT_ID")
 	deviceID := os.Getenv("VAPPCLOUD_REAL_DEVICE_ID")
-	if apiURL == "" || projectID == "" || deviceID == "" {
-		t.Fatal("VAPPCLOUD_API_URL, VAPPCLOUD_REAL_PROJECT_ID, VAPPCLOUD_REAL_DEVICE_ID, and a supported temporary credential source are required")
+	if apiURL == "" || accountID == "" || deviceID == "" {
+		t.Fatal("VAPPCLOUD_API_URL, VAPPCLOUD_REAL_ACCOUNT_ID, VAPPCLOUD_REAL_DEVICE_ID, and a supported temporary credential source are required")
 	}
 
 	api, err := realAPIClient(apiURL)
@@ -191,14 +191,14 @@ provider "vappcloud" {
   api_url = %q
 }
 resource "vappcloud_vmm" "qa" {
-  project_id          = %q
+  account_id          = %q
   device_id           = %q
   name                = %q
   cpu_cores           = %d
   memory_mb           = 2048
   deletion_protection = false
   retain_disk         = false
-}`, apiURL, projectID, deviceID, name, cpu)
+}`, apiURL, accountID, deviceID, name, cpu)
 	}
 
 	var vmmID string
@@ -252,7 +252,7 @@ resource "vappcloud_vmm" "qa" {
 				ImportState:       true,
 				ImportStateVerify: true,
 				ImportStateIdFunc: func(*terraform.State) (string, error) {
-					return projectID + "/" + vmmID, nil
+					return accountID + "/" + vmmID, nil
 				},
 			},
 		},

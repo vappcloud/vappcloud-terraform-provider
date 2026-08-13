@@ -31,7 +31,7 @@ type applicationInstanceResource struct{ resourceBase }
 
 type applicationInstanceResourceModel struct {
 	ID              types.String      `tfsdk:"id"`
-	ProjectID       types.String      `tfsdk:"project_id"`
+	AccountID       types.String      `tfsdk:"account_id"`
 	Name            types.String      `tfsdk:"name"`
 	Description     types.String      `tfsdk:"description"`
 	Source          types.Object      `tfsdk:"source"`
@@ -88,7 +88,7 @@ func (r *applicationInstanceResource) Schema(ctx context.Context, _ resource.Sch
 		Version:             0,
 		MarkdownDescription: "A marketplace or GitHub application deployed explicitly to one or more VMMs.",
 		Attributes: withCommon(map[string]schema.Attribute{
-			"project_id":  immutableString("Owning project ID."),
+			"account_id":  immutableString("Owning account ID."),
 			"name":        schema.StringAttribute{Required: true, MarkdownDescription: "Application instance name."},
 			"description": schema.StringAttribute{Optional: true, MarkdownDescription: "Mutable description."},
 			"source": schema.SingleNestedAttribute{
@@ -196,7 +196,7 @@ func (r *applicationInstanceResource) Create(ctx context.Context, req resource.C
 		return
 	}
 	payload := map[string]any{
-		"project_id":  plan.ProjectID.ValueString(),
+		"account_id":  plan.AccountID.ValueString(),
 		"name":        plan.Name.ValueString(),
 		"description": plan.Description.ValueString(),
 		"source":      source,
@@ -222,7 +222,7 @@ func (r *applicationInstanceResource) Create(ctx context.Context, req resource.C
 	}
 	applicationToState(result.Resource, &plan, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *applicationInstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -231,14 +231,14 @@ func (r *applicationInstanceResource) Read(ctx context.Context, req resource.Rea
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 	var instance client.ApplicationInstance
 	if !readResource(ctx, r.client, "/v1/application-instances/"+client.Escape(state.ID.ValueString()), &instance, &resp.State, &resp.Diagnostics) {
 		return
 	}
 	applicationToState(instance, &state, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, state.ID.ValueString(), state.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *applicationInstanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -291,7 +291,7 @@ func (r *applicationInstanceResource) Update(ctx context.Context, req resource.U
 	}
 	applicationToState(result.Resource, &plan, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.ProjectID.ValueString(), &resp.Diagnostics)
+	setResourceIdentity(ctx, resp.Identity, plan.ID.ValueString(), plan.AccountID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *applicationInstanceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -338,7 +338,7 @@ func (r *applicationInstanceResource) ImportState(ctx context.Context, req resou
 	}
 	parts := strings.Split(req.ID, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		resp.Diagnostics.AddError("Invalid application import identifier", "Expected <project_id>/<application_instance_id>.")
+		resp.Diagnostics.AddError("Invalid application import identifier", "Expected <account_id>/<application_instance_id>.")
 		return
 	}
 	var application client.ApplicationInstance
@@ -346,15 +346,15 @@ func (r *applicationInstanceResource) ImportState(ctx context.Context, req resou
 		resp.Diagnostics.AddError("Unable to import application instance", err.Error())
 		return
 	}
-	if application.ProjectID != parts[0] {
+	if application.AccountID != parts[0] {
 		resp.Diagnostics.AddError(
-			"Application project mismatch",
-			fmt.Sprintf("Application instance %s belongs to project %s, not %s.", parts[1], application.ProjectID, parts[0]),
+			"Application account mismatch",
+			fmt.Sprintf("Application instance %s belongs to account %s, not %s.", parts[1], application.AccountID, parts[0]),
 		)
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), parts[0])...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("account_id"), parts[0])...)
 }
 
 func applicationPlanValues(ctx context.Context, plan applicationInstanceResourceModel, diagnostics interface {
@@ -389,7 +389,7 @@ func applicationToState(instance client.ApplicationInstance, state *applicationI
 	Append(...diag.Diagnostic)
 }) {
 	state.ID = types.StringValue(instance.ID)
-	state.ProjectID = types.StringValue(instance.ProjectID)
+	state.AccountID = types.StringValue(instance.AccountID)
 	state.Name = types.StringValue(instance.Name)
 	if state.Description.IsNull() && instance.Description == "" {
 		state.Description = types.StringNull()
