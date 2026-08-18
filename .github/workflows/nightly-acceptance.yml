@@ -44,7 +44,7 @@ jobs:
           tofu_version: ${{ matrix.version }}
           tofu_wrapper: false
       - name: Acquire protected GitHub OIDC token
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('node:fs');
