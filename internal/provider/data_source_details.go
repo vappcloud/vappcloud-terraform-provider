@@ -76,22 +76,23 @@ type vmmDetailModel struct {
 }
 
 type applicationDetailModel struct {
-	ID              types.String `tfsdk:"id"`
-	AccountID       types.String `tfsdk:"account_id"`
-	Name            types.String `tfsdk:"name"`
-	Description     types.String `tfsdk:"description"`
-	Source          types.Object `tfsdk:"source"`
-	Placements      types.List   `tfsdk:"placement"`
-	SecretIDs       types.Set    `tfsdk:"secret_ids"`
-	State           types.String `tfsdk:"state"`
-	ReadyReplicas   types.Int64  `tfsdk:"ready_replicas"`
-	DesiredReplicas types.Int64  `tfsdk:"desired_replicas"`
-	OperationStatus types.String `tfsdk:"operation_status"`
-	OperationID     types.String `tfsdk:"operation_id"`
-	CorrelationID   types.String `tfsdk:"correlation_id"`
-	ResourceVersion types.Int64  `tfsdk:"resource_version"`
-	CreatedAt       types.String `tfsdk:"created_at"`
-	UpdatedAt       types.String `tfsdk:"updated_at"`
+	ID                  types.String `tfsdk:"id"`
+	AccountID           types.String `tfsdk:"account_id"`
+	Name                types.String `tfsdk:"name"`
+	Description         types.String `tfsdk:"description"`
+	Source              types.Object `tfsdk:"source"`
+	Placements          types.List   `tfsdk:"placement"`
+	SecretIDs           types.Set    `tfsdk:"secret_ids"`
+	LoadBalancingPolicy types.String `tfsdk:"load_balancing_policy"`
+	State               types.String `tfsdk:"state"`
+	ReadyReplicas       types.Int64  `tfsdk:"ready_replicas"`
+	DesiredReplicas     types.Int64  `tfsdk:"desired_replicas"`
+	OperationStatus     types.String `tfsdk:"operation_status"`
+	OperationID         types.String `tfsdk:"operation_id"`
+	CorrelationID       types.String `tfsdk:"correlation_id"`
+	ResourceVersion     types.Int64  `tfsdk:"resource_version"`
+	CreatedAt           types.String `tfsdk:"created_at"`
+	UpdatedAt           types.String `tfsdk:"updated_at"`
 }
 
 func detailString(description string) schema.StringAttribute {
@@ -284,16 +285,17 @@ func (d *applicationInstanceDataSource) Schema(_ context.Context, _ datasource.S
 			"placement": schema.ListNestedAttribute{Computed: true, NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 				"vmm_id": detailString("Target VMM ID."), "replica_count": schema.Int64Attribute{Computed: true},
 			}}},
-			"secret_ids":       schema.SetAttribute{Computed: true, ElementType: types.StringType},
-			"state":            detailString("Deployment state."),
-			"ready_replicas":   schema.Int64Attribute{Computed: true},
-			"desired_replicas": schema.Int64Attribute{Computed: true},
-			"operation_status": detailString("Latest operation state."),
-			"operation_id":     detailString("Latest operation ID."),
-			"correlation_id":   detailString("Latest correlation ID."),
-			"resource_version": detailVersion(),
-			"created_at":       detailString("Creation timestamp."),
-			"updated_at":       detailString("Last update timestamp."),
+			"secret_ids":            schema.SetAttribute{Computed: true, ElementType: types.StringType},
+			"load_balancing_policy": detailString("Immutable traffic policy."),
+			"state":                 detailString("Deployment state."),
+			"ready_replicas":        schema.Int64Attribute{Computed: true},
+			"desired_replicas":      schema.Int64Attribute{Computed: true},
+			"operation_status":      detailString("Latest operation state."),
+			"operation_id":          detailString("Latest operation ID."),
+			"correlation_id":        detailString("Latest correlation ID."),
+			"resource_version":      detailVersion(),
+			"created_at":            detailString("Creation timestamp."),
+			"updated_at":            detailString("Last update timestamp."),
 		},
 	}
 }
@@ -318,6 +320,7 @@ func (d *applicationInstanceDataSource) Read(ctx context.Context, req datasource
 	state.Source = converted.Source
 	state.Placements = converted.Placements
 	state.SecretIDs = converted.SecretIDs
+	state.LoadBalancingPolicy = converted.LoadBalancingPolicy
 	state.State = converted.State
 	state.ReadyReplicas = converted.ReadyReplicas
 	state.DesiredReplicas = converted.DesiredReplicas

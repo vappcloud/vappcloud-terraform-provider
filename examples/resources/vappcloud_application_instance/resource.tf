@@ -2,6 +2,7 @@ resource "vappcloud_application_instance" "nginx" {
   account_id  = vappcloud_account.example.id
   name        = "nginx"
   description = "Example marketplace deployment"
+  load_balancing_policy = "round_robin"
 
   source = {
     kind                       = "marketplace"

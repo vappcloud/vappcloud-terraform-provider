@@ -35,11 +35,11 @@ resource "vappcloud_compute_instance" "worker" {
 
 ### Required
 
+- `account_id` (String) Owning account ID.
 - `cloud_connection_id` (String) Preconfigured cloud connection ID.
 - `device_id` (String) Pre-created logical device ID.
 - `image` (String) Cloud image slug or ID.
 - `name` (String) Compute instance name.
-- `account_id` (String) Owning account ID.
 - `region` (String) Cloud region slug.
 - `size` (String) Cloud size slug.
 

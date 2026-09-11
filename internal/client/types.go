@@ -139,20 +139,21 @@ type ApplicationSource struct {
 }
 
 type ApplicationInstance struct {
-	ID              string            `json:"id"`
-	AccountID       string            `json:"accountId"`
-	Name            string            `json:"name"`
-	Description     string            `json:"description,omitempty"`
-	Source          ApplicationSource `json:"source"`
-	Placements      []Placement       `json:"placements"`
-	SecretIDs       []string          `json:"secretIds,omitempty"`
-	State           string            `json:"state"`
-	ReadyReplicas   int64             `json:"readyReplicas"`
-	DesiredReplicas int64             `json:"desiredReplicas"`
-	ResourceVersion Version           `json:"resourceVersion"`
-	Operation       Operation         `json:"operation"`
-	CreatedAt       time.Time         `json:"createdAt"`
-	UpdatedAt       time.Time         `json:"updatedAt"`
+	ID                  string            `json:"id"`
+	AccountID           string            `json:"accountId"`
+	Name                string            `json:"name"`
+	Description         string            `json:"description,omitempty"`
+	Source              ApplicationSource `json:"source"`
+	Placements          []Placement       `json:"placements"`
+	SecretIDs           []string          `json:"secretIds,omitempty"`
+	LoadBalancingPolicy string            `json:"loadBalancingPolicy"`
+	State               string            `json:"state"`
+	ReadyReplicas       int64             `json:"readyReplicas"`
+	DesiredReplicas     int64             `json:"desiredReplicas"`
+	ResourceVersion     Version           `json:"resourceVersion"`
+	Operation           Operation         `json:"operation"`
+	CreatedAt           time.Time         `json:"createdAt"`
+	UpdatedAt           time.Time         `json:"updatedAt"`
 }
 
 type NamedItem struct {

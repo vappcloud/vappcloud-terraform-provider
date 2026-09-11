@@ -416,12 +416,13 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 				return
 			}
 			var in struct {
-				AccountID   string                   `json:"account_id"`
-				Name        string                   `json:"name"`
-				Description string                   `json:"description"`
-				Source      client.ApplicationSource `json:"source"`
-				Placements  []client.Placement       `json:"placements"`
-				SecretIDs   []string                 `json:"secret_ids"`
+				AccountID           string                   `json:"account_id"`
+				Name                string                   `json:"name"`
+				Description         string                   `json:"description"`
+				Source              client.ApplicationSource `json:"source"`
+				Placements          []client.Placement       `json:"placements"`
+				SecretIDs           []string                 `json:"secret_ids"`
+				LoadBalancingPolicy string                   `json:"load_balancing_policy"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			now := api.now()
@@ -432,7 +433,8 @@ func newAcceptanceServer(t *testing.T) (*httptest.Server, *acceptanceAPI) {
 			app := client.ApplicationInstance{
 				ID: "app-test", AccountID: in.AccountID, Name: in.Name, Description: in.Description,
 				Source: in.Source, Placements: in.Placements, SecretIDs: in.SecretIDs,
-				State: "running", ReadyReplicas: desired, DesiredReplicas: desired,
+				LoadBalancingPolicy: in.LoadBalancingPolicy,
+				State:               "running", ReadyReplicas: desired, DesiredReplicas: desired,
 				ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
 			}
 			op := succeededOperation(api, "application.create", app.ID)

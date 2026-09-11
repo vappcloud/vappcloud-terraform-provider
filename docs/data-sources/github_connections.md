@@ -23,10 +23,10 @@ data "vappcloud_github_connections" "all" {
 
 ### Optional
 
+- `account_id` (String)
 - `application_id` (String)
 - `cloud_connection_id` (String)
 - `github_connection_id` (String)
-- `account_id` (String)
 - `region` (String)
 
 ### Read-Only

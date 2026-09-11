@@ -23,11 +23,11 @@ data "vappcloud_device" "selected" {
 
 ### Read-Only
 
+- `account_id` (String) Owning account ID.
 - `created_at` (String) Creation timestamp.
 - `default_vmm_id` (String) System-managed default VMM ID.
 - `id` (String) The ID of this resource.
 - `name` (String) Device name.
-- `account_id` (String) Owning account ID.
 - `resource_version` (Number) Optimistic concurrency version.
 - `state` (String) Enrollment and connection state.
 - `updated_at` (String) Last update timestamp.

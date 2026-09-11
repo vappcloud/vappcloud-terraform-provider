@@ -23,6 +23,7 @@ data "vappcloud_compute_instance" "selected" {
 
 ### Read-Only
 
+- `account_id` (String) Owning account ID.
 - `cloud_connection_id` (String) Cloud connection ID.
 - `created_at` (String) Creation timestamp.
 - `default_vmm_id` (String) Default VMM ID.
@@ -30,7 +31,6 @@ data "vappcloud_compute_instance" "selected" {
 - `id` (String) The ID of this resource.
 - `image` (String) Cloud image.
 - `name` (String) Compute instance name.
-- `account_id` (String) Owning account ID.
 - `region` (String) Cloud region.
 - `resource_version` (Number) Optimistic concurrency version.
 - `size` (String) Cloud size.
