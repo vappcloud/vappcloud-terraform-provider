@@ -35,11 +35,11 @@ resource "vappcloud_vmm" "secondary" {
 
 ### Required
 
+- `account_id` (String) Immutable owning account ID.
 - `cpu_cores` (Number) Desired virtual CPU cores.
 - `device_id` (String) Immutable host device ID.
 - `memory_mb` (Number) Desired memory in MiB.
 - `name` (String) VMM name.
-- `account_id` (String) Immutable owning account ID.
 
 ### Optional
 

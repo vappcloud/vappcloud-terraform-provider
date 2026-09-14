@@ -17,6 +17,7 @@ resource "vappcloud_application_instance" "nginx" {
   account_id  = vappcloud_account.example.id
   name        = "nginx"
   description = "Example marketplace deployment"
+  load_balancing_policy = "round_robin"
 
   source = {
     kind                       = "marketplace"
@@ -38,14 +39,15 @@ resource "vappcloud_application_instance" "nginx" {
 
 ### Required
 
+- `account_id` (String) Owning account ID.
 - `name` (String) Application instance name.
 - `placement` (Attributes List) (see [below for nested schema](#nestedatt--placement))
-- `account_id` (String) Owning account ID.
 - `source` (Attributes) Exactly one marketplace or GitHub source. Source changes replace the deployment. (see [below for nested schema](#nestedatt--source))
 
 ### Optional
 
 - `description` (String) Mutable description.
+- `load_balancing_policy` (String) Immutable traffic policy. Round Robin is Maglev five-tuple flow hashing; connection_persistence is source-IP affinity.
 - `secret_ids` (Set of String) References to preconfigured secret IDs. Secret values are never accepted or stored.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 

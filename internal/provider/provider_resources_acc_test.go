@@ -128,6 +128,7 @@ data "vappcloud_github_repositories" "all" { github_connection_id = "github-test
 					resource.TestCheckResourceAttr("vappcloud_compute_instance.test", "state", "running"),
 					resource.TestCheckResourceAttr("vappcloud_vmm.test", "management", "terraform"),
 					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "desired_replicas", "1"),
+					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "load_balancing_policy", "round_robin"),
 					resource.TestCheckResourceAttr("data.vappcloud_accounts.all", "accounts.#", "1"),
 					resource.TestCheckResourceAttr("data.vappcloud_devices.all", "items.#", "1"),
 					resource.TestCheckResourceAttr("data.vappcloud_compute_instances.all", "items.#", "1"),

@@ -24,8 +24,8 @@ resource "vappcloud_device" "worker" {
 
 ### Required
 
-- `name` (String) Device name.
 - `account_id` (String) Owning account ID.
+- `name` (String) Device name.
 
 ### Optional
 

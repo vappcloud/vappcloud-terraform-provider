@@ -23,16 +23,17 @@ data "vappcloud_application_instance" "selected" {
 
 ### Read-Only
 
+- `account_id` (String) Owning account ID.
 - `correlation_id` (String) Latest correlation ID.
 - `created_at` (String) Creation timestamp.
 - `description` (String) Application description.
 - `desired_replicas` (Number)
 - `id` (String) The ID of this resource.
+- `load_balancing_policy` (String) Immutable traffic policy.
 - `name` (String) Application instance name.
 - `operation_id` (String) Latest operation ID.
 - `operation_status` (String) Latest operation state.
 - `placement` (Attributes List) (see [below for nested schema](#nestedatt--placement))
-- `account_id` (String) Owning account ID.
 - `ready_replicas` (Number)
 - `resource_version` (Number) Optimistic concurrency version.
 - `secret_ids` (Set of String)

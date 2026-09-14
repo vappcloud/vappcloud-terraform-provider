@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -30,23 +31,24 @@ import (
 type applicationInstanceResource struct{ resourceBase }
 
 type applicationInstanceResourceModel struct {
-	ID              types.String      `tfsdk:"id"`
-	AccountID       types.String      `tfsdk:"account_id"`
-	Name            types.String      `tfsdk:"name"`
-	Description     types.String      `tfsdk:"description"`
-	Source          types.Object      `tfsdk:"source"`
-	Placements      types.List        `tfsdk:"placement"`
-	SecretIDs       types.Set         `tfsdk:"secret_ids"`
-	State           types.String      `tfsdk:"state"`
-	ReadyReplicas   types.Int64       `tfsdk:"ready_replicas"`
-	DesiredReplicas types.Int64       `tfsdk:"desired_replicas"`
-	OperationStatus types.String      `tfsdk:"operation_status"`
-	OperationID     types.String      `tfsdk:"operation_id"`
-	CorrelationID   types.String      `tfsdk:"correlation_id"`
-	ResourceVersion types.Int64       `tfsdk:"resource_version"`
-	CreatedAt       timetypes.RFC3339 `tfsdk:"created_at"`
-	UpdatedAt       timetypes.RFC3339 `tfsdk:"updated_at"`
-	Timeouts        operationTimeouts `tfsdk:"timeouts"`
+	ID                  types.String      `tfsdk:"id"`
+	AccountID           types.String      `tfsdk:"account_id"`
+	Name                types.String      `tfsdk:"name"`
+	Description         types.String      `tfsdk:"description"`
+	Source              types.Object      `tfsdk:"source"`
+	Placements          types.List        `tfsdk:"placement"`
+	SecretIDs           types.Set         `tfsdk:"secret_ids"`
+	LoadBalancingPolicy types.String      `tfsdk:"load_balancing_policy"`
+	State               types.String      `tfsdk:"state"`
+	ReadyReplicas       types.Int64       `tfsdk:"ready_replicas"`
+	DesiredReplicas     types.Int64       `tfsdk:"desired_replicas"`
+	OperationStatus     types.String      `tfsdk:"operation_status"`
+	OperationID         types.String      `tfsdk:"operation_id"`
+	CorrelationID       types.String      `tfsdk:"correlation_id"`
+	ResourceVersion     types.Int64       `tfsdk:"resource_version"`
+	CreatedAt           timetypes.RFC3339 `tfsdk:"created_at"`
+	UpdatedAt           timetypes.RFC3339 `tfsdk:"updated_at"`
+	Timeouts            operationTimeouts `tfsdk:"timeouts"`
 }
 
 type sourceModel struct {
@@ -132,6 +134,14 @@ func (r *applicationInstanceResource) Schema(ctx context.Context, _ resource.Sch
 				ElementType:         types.StringType,
 				MarkdownDescription: "References to preconfigured secret IDs. Secret values are never accepted or stored.",
 			},
+			"load_balancing_policy": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString("round_robin"),
+				MarkdownDescription: "Immutable traffic policy. Round Robin is Maglev five-tuple flow hashing; connection_persistence is source-IP affinity.",
+				Validators:          []validator.String{stringvalidator.OneOf("round_robin", "connection_persistence")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
 			"state":            computedString("Deployment state."),
 			"ready_replicas":   schema.Int64Attribute{Computed: true},
 			"desired_replicas": schema.Int64Attribute{Computed: true},
@@ -196,12 +206,13 @@ func (r *applicationInstanceResource) Create(ctx context.Context, req resource.C
 		return
 	}
 	payload := map[string]any{
-		"account_id":  plan.AccountID.ValueString(),
-		"name":        plan.Name.ValueString(),
-		"description": plan.Description.ValueString(),
-		"source":      source,
-		"placements":  placements,
-		"secret_ids":  secretIDs,
+		"account_id":            plan.AccountID.ValueString(),
+		"name":                  plan.Name.ValueString(),
+		"description":           plan.Description.ValueString(),
+		"source":                source,
+		"placements":            placements,
+		"secret_ids":            secretIDs,
+		"load_balancing_policy": plan.LoadBalancingPolicy.ValueString(),
 	}
 	key := createMutationKey(&resp.Diagnostics, "vappcloud_application_instance.create")
 	if resp.Diagnostics.HasError() {
@@ -432,6 +443,7 @@ func applicationToState(instance client.ApplicationInstance, state *applicationI
 	state.State = types.StringValue(instance.State)
 	state.ReadyReplicas = types.Int64Value(instance.ReadyReplicas)
 	state.DesiredReplicas = types.Int64Value(instance.DesiredReplicas)
+	state.LoadBalancingPolicy = types.StringValue(instance.LoadBalancingPolicy)
 	state.ResourceVersion = types.Int64Value(instance.ResourceVersion.Int64())
 	state.OperationStatus = types.StringValue(instance.Operation.State)
 	state.OperationID = types.StringValue(instance.Operation.ID)

@@ -23,6 +23,7 @@ data "vappcloud_vmm" "selected" {
 
 ### Read-Only
 
+- `account_id` (String) Owning account ID.
 - `correlation_id` (String) Latest correlation ID.
 - `cpu_cores` (Number)
 - `created_at` (String) Creation timestamp.
@@ -39,7 +40,6 @@ data "vappcloud_vmm" "selected" {
 - `observed_revision` (Number)
 - `operation_id` (String) Latest operation ID.
 - `operation_status` (String) Latest operation state.
-- `account_id` (String) Owning account ID.
 - `resource_version` (Number) Optimistic concurrency version.
 - `retain_disk` (Boolean)
 - `state` (String) Runtime state.
