@@ -21,3 +21,20 @@ port. It is not cookie-based HTTP session persistence.
       # ...
       load_balancing_policy = "connection_persistence"
     }
+
+## Distributed service ingress
+
+Application placement accepts zero replicas on any number of VMMs when at
+least one other placement has a positive replica count. A zero-count placement
+is a service-ingress member: it runs no application container and reserves no
+workload capacity. The provider preserves `0` explicitly in the API payload.
+
+One placement is a same-VMM deployment and must have at least one replica.
+For distributed placement, every `replica_count` must be non-negative, VMM IDs
+must be unique, and the sum must be greater than zero.
+
+    placement = [
+      { vmm_id = "vmm-ingress-a", replica_count = 0 },
+      { vmm_id = "vmm-ingress-b", replica_count = 0 },
+      { vmm_id = "vmm-workload",  replica_count = 2 },
+    ]

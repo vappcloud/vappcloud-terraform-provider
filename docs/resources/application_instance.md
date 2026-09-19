@@ -31,6 +31,9 @@ resource "vappcloud_application_instance" "nginx" {
       replica_count = 1
     }
   ]
+
+  # Distributed services may add any number of VMMs with replica_count = 0.
+  # Those members provide service ingress without running an app container.
 }
 ```
 
@@ -41,7 +44,7 @@ resource "vappcloud_application_instance" "nginx" {
 
 - `account_id` (String) Owning account ID.
 - `name` (String) Application instance name.
-- `placement` (Attributes List) (see [below for nested schema](#nestedatt--placement))
+- `placement` (Attributes List) Target VMM membership. A single placement requires at least one replica. Multiple placements may use zero for service-ingress VMMs, but their total replica count must be positive. (see [below for nested schema](#nestedatt--placement))
 - `source` (Attributes) Exactly one marketplace or GitHub source. Source changes replace the deployment. (see [below for nested schema](#nestedatt--source))
 
 ### Optional
@@ -69,7 +72,7 @@ resource "vappcloud_application_instance" "nginx" {
 
 Required:
 
-- `replica_count` (Number) Replicas placed on this VMM.
+- `replica_count` (Number) Replicas placed on this VMM. Zero makes a distributed member service ingress without a container or workload capacity reservation.
 - `vmm_id` (String) Target VMM ID. Changing placement identity replaces the deployment.
 
 
