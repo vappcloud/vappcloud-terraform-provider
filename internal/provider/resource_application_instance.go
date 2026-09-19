@@ -110,21 +110,23 @@ func (r *applicationInstanceResource) Schema(ctx context.Context, _ resource.Sch
 				PlanModifiers: []planmodifier.Object{objectplanmodifier.RequiresReplace()},
 			},
 			"placement": schema.ListNestedAttribute{
-				Required:   true,
-				Validators: []validator.List{listvalidator.SizeAtLeast(1)},
+				Required:            true,
+				MarkdownDescription: "Target VMM membership. A single placement requires at least one replica. Multiple placements may use zero for service-ingress VMMs, but their total replica count must be positive.",
+				Validators:          []validator.List{listvalidator.SizeAtLeast(1)},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"vmm_id": schema.StringAttribute{
 							Required:            true,
 							MarkdownDescription: "Target VMM ID. Changing placement identity replaces the deployment.",
+							Validators:          []validator.String{stringvalidator.LengthAtLeast(1)},
 							PlanModifiers: []planmodifier.String{
 								stringplanmodifier.RequiresReplace(),
 							},
 						},
 						"replica_count": schema.Int64Attribute{
 							Required:            true,
-							Validators:          []validator.Int64{int64validator.AtLeast(1)},
-							MarkdownDescription: "Replicas placed on this VMM.",
+							Validators:          []validator.Int64{int64validator.AtLeast(0)},
+							MarkdownDescription: "Replicas placed on this VMM. Zero makes a distributed member service ingress without a container or workload capacity reservation.",
 						},
 					},
 				},
@@ -160,6 +162,10 @@ func (r *applicationInstanceResource) IdentitySchema(_ context.Context, _ resour
 func (r *applicationInstanceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var config applicationInstanceResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	validateApplicationPlacementConfig(config.Placements, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() || config.Source.IsNull() || config.Source.IsUnknown() {
 		return
 	}
@@ -184,6 +190,58 @@ func (r *applicationInstanceResource) ValidateConfig(ctx context.Context, req re
 		if nonempty(source.MarketplaceApplicationID) || nonempty(source.MarketplaceVersionID) {
 			resp.Diagnostics.AddAttributeError(path.Root("source"), "Mixed source configuration", "Marketplace fields cannot be set for a GitHub source.")
 		}
+	}
+}
+
+func validateApplicationPlacementConfig(placements types.List, diagnostics *diag.Diagnostics) {
+	if placements.IsNull() || placements.IsUnknown() {
+		return
+	}
+
+	var total int64
+	allCountsKnown := true
+	knownVMMs := make(map[string]struct{}, len(placements.Elements()))
+	for _, element := range placements.Elements() {
+		placement, ok := element.(basetypes.ObjectValue)
+		if !ok || placement.IsNull() || placement.IsUnknown() {
+			allCountsKnown = false
+			continue
+		}
+		attributes := placement.Attributes()
+		if vmmID, ok := attributes["vmm_id"].(basetypes.StringValue); ok && !vmmID.IsNull() && !vmmID.IsUnknown() {
+			value := strings.TrimSpace(vmmID.ValueString())
+			if _, duplicate := knownVMMs[value]; duplicate {
+				diagnostics.AddAttributeError(
+					path.Root("placement"),
+					"Duplicate application placement",
+					fmt.Sprintf("VMM %q can appear only once in placement.", value),
+				)
+				return
+			}
+			knownVMMs[value] = struct{}{}
+		}
+		count, ok := attributes["replica_count"].(basetypes.Int64Value)
+		if !ok || count.IsNull() || count.IsUnknown() {
+			allCountsKnown = false
+			continue
+		}
+		if count.ValueInt64() < 0 {
+			diagnostics.AddAttributeError(
+				path.Root("placement"),
+				"Invalid application replica count",
+				"Every placement replica_count must be zero or greater.",
+			)
+			return
+		}
+		total += count.ValueInt64()
+	}
+
+	if allCountsKnown && total < 1 {
+		diagnostics.AddAttributeError(
+			path.Root("placement"),
+			"Application placement has no replicas",
+			"At least one selected VMM must have a positive replica_count. Zero-count VMMs are service ingress members and cannot form an application by themselves.",
+		)
 	}
 }
 
@@ -368,9 +426,11 @@ func (r *applicationInstanceResource) ImportState(ctx context.Context, req resou
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("account_id"), parts[0])...)
 }
 
-func applicationPlanValues(ctx context.Context, plan applicationInstanceResourceModel, diagnostics interface {
-	Append(...diag.Diagnostic)
-}) (client.ApplicationSource, []client.Placement, []string) {
+func applicationPlanValues(
+	ctx context.Context,
+	plan applicationInstanceResourceModel,
+	diagnostics *diag.Diagnostics,
+) (client.ApplicationSource, []client.Placement, []string) {
 	var sourceModelValue sourceModel
 	diagnostics.Append(plan.Source.As(ctx, &sourceModelValue, basetypes.ObjectAsOptions{})...)
 	source := client.ApplicationSource{
@@ -389,11 +449,66 @@ func applicationPlanValues(ctx context.Context, plan applicationInstanceResource
 			VMMID: placement.VMMID.ValueString(), ReplicaCount: placement.ReplicaCount.ValueInt64(),
 		})
 	}
+	validateResolvedApplicationPlacements(placements, diagnostics)
 	var secretValues []string
 	if !plan.SecretIDs.IsNull() && !plan.SecretIDs.IsUnknown() {
 		diagnostics.Append(plan.SecretIDs.ElementsAs(ctx, &secretValues, false)...)
 	}
 	return source, placements, secretValues
+}
+
+func validateResolvedApplicationPlacements(placements []client.Placement, diagnostics *diag.Diagnostics) {
+	if diagnostics.HasError() {
+		return
+	}
+	if len(placements) == 0 {
+		diagnostics.AddAttributeError(
+			path.Root("placement"),
+			"Application placement is empty",
+			"At least one VMM placement is required.",
+		)
+		return
+	}
+
+	var total int64
+	knownVMMs := make(map[string]struct{}, len(placements))
+	for _, placement := range placements {
+		vmmID := strings.TrimSpace(placement.VMMID)
+		if vmmID == "" {
+			diagnostics.AddAttributeError(
+				path.Root("placement"),
+				"Invalid application placement VMM",
+				"Every placement must contain a non-empty vmm_id.",
+			)
+			return
+		}
+		if _, duplicate := knownVMMs[vmmID]; duplicate {
+			diagnostics.AddAttributeError(
+				path.Root("placement"),
+				"Duplicate application placement",
+				fmt.Sprintf("VMM %q can appear only once in placement.", vmmID),
+			)
+			return
+		}
+		knownVMMs[vmmID] = struct{}{}
+		if placement.ReplicaCount < 0 {
+			diagnostics.AddAttributeError(
+				path.Root("placement"),
+				"Invalid application replica count",
+				"Every placement replica_count must be zero or greater.",
+			)
+			return
+		}
+		total += placement.ReplicaCount
+	}
+
+	if total < 1 {
+		diagnostics.AddAttributeError(
+			path.Root("placement"),
+			"Application placement has no replicas",
+			"At least one selected VMM must have a positive replica_count. Zero-count VMMs are service ingress members and cannot form an application by themselves.",
+		)
+	}
 }
 
 func applicationToState(instance client.ApplicationInstance, state *applicationInstanceResourceModel, diagnostics interface {

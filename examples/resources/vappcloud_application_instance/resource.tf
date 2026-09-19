@@ -16,4 +16,7 @@ resource "vappcloud_application_instance" "nginx" {
       replica_count = 1
     }
   ]
+
+  # Distributed services may add any number of VMMs with replica_count = 0.
+  # Those members provide service ingress without running an app container.
 }

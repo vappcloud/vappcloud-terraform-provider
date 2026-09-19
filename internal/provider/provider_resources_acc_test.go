@@ -64,10 +64,16 @@ resource "vappcloud_application_instance" "test" {
     marketplace_application_id = "catalog-test"
     marketplace_version_id     = "version-test"
   }
-  placement = [{
-    vmm_id        = vappcloud_vmm.test.id
-    replica_count = %d
-  }]
+  placement = [
+    {
+      vmm_id        = "vmm-default"
+      replica_count = 0
+    },
+    {
+      vmm_id        = vappcloud_vmm.test.id
+      replica_count = %d
+    }
+  ]
 }
 
 data "vappcloud_accounts" "all" {
@@ -128,6 +134,7 @@ data "vappcloud_github_repositories" "all" { github_connection_id = "github-test
 					resource.TestCheckResourceAttr("vappcloud_compute_instance.test", "state", "running"),
 					resource.TestCheckResourceAttr("vappcloud_vmm.test", "management", "terraform"),
 					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "desired_replicas", "1"),
+					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "placement.0.replica_count", "0"),
 					resource.TestCheckResourceAttr("vappcloud_application_instance.test", "load_balancing_policy", "round_robin"),
 					resource.TestCheckResourceAttr("data.vappcloud_accounts.all", "accounts.#", "1"),
 					resource.TestCheckResourceAttr("data.vappcloud_devices.all", "items.#", "1"),
